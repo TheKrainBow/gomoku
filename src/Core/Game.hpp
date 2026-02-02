@@ -22,6 +22,8 @@ public:
 	bool tryApplyMove(const Move& move);
 	void tick();
 	bool submitHumanMove(const Move& move);
+	bool hasGhostBoard() const;
+	Board getGhostBoard() const;
 
 private:
 	GameSettings settings;

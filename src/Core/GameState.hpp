@@ -19,6 +19,8 @@ public:
 	Move lastMove;
 	int capturedStonesBlack;
 	int capturedStonesWhite;
+	bool mustCapture;
+	std::vector<Move> forcedCaptureMoves;
 	std::string lastMessage;
 	std::vector<Move> winningLine;
 

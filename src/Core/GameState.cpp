@@ -6,6 +6,8 @@ GameState::GameState()
 	  hasLastMove(false),
 	  capturedStonesBlack(0),
 	  capturedStonesWhite(0),
+	  mustCapture(false),
+	  forcedCaptureMoves(),
 	  lastMessage(),
 	  winningLine() {
 }
@@ -18,6 +20,8 @@ void GameState::reset(const GameSettings& settings) {
 	lastMove = Move();
 	capturedStonesBlack = 0;
 	capturedStonesWhite = 0;
+	mustCapture = false;
+	forcedCaptureMoves.clear();
 	lastMessage.clear();
 	winningLine.clear();
 }

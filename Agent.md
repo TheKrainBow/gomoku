@@ -32,4 +32,4 @@ This file tracks AI-assisted changes and serves as context for future agents. Up
 - If rules change, update `src/Core/Rules.cpp` and add/adjust debug tests in `src/Debug/DebugTests.cpp`.
 
 ## Latest update
-- Updated `README.md` to document game rules, logging/timing, UI behavior, project structure, debug tests, and configuration.
+- Added per-player AI caches with re-rooting, PV move ordering from TT, cache size logging, and forced-capture enforcement when alignment can be broken by capture.

@@ -19,7 +19,10 @@ public:
 	bool isForbiddenDoubleThree(Board& board, const Move& move, GameState::PlayerColor player) const;
 	std::vector<Move> findCaptures(const Board& board, const Move& move, Board::Cell playerCell) const;
 	bool opponentCanBreakAlignmentByCapture(const GameState& afterMoveState, GameState::PlayerColor opponent) const;
+	std::vector<Move> findAlignmentBreakCaptures(const GameState& afterMoveState, GameState::PlayerColor opponent) const;
 	bool findAlignmentLine(const Board& board, const Move& lastMove, std::vector<Move>& outLine) const;
+	int getWinLength() const;
+	int getCaptureWinStones() const;
 
 private:
 	GameSettings settings;

@@ -11,6 +11,8 @@ public:
 	void tick();
 	const GameState& state() const;
 	const MoveHistory& history() const;
+	bool hasGhostBoard() const;
+	Board ghostBoard() const;
 
 private:
 	Game game;

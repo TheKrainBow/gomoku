@@ -1,6 +1,6 @@
 NAME := Gomoku
 CXX  := c++
-CXXFLAGS := -std=c++20 -Wall -Wextra -Werror -g -fsanitize=address
+CXXFLAGS := -std=c++20 -Wall -Wextra -Werror -O3
 
 SRC_DIR := src
 OBJ_DIR := obj
@@ -16,6 +16,7 @@ SRCS := \
 	$(SRC_DIR)/Players/IPlayer.cpp \
 	$(SRC_DIR)/Players/HumanPlayer.cpp \
 	$(SRC_DIR)/Players/AIPlayer.cpp \
+	$(SRC_DIR)/Players/AIScoring.cpp \
 	$(SRC_DIR)/Debug/DebugTests.cpp \
 	$(SRC_DIR)/Core/Game.cpp \
 	$(SRC_DIR)/UI/SdlApp.cpp \

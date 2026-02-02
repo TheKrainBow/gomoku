@@ -9,10 +9,15 @@ SdlApp::SdlApp(GameController& controllerIn, const UiLayout& layoutIn)
 	  renderer(),
 	  window(nullptr),
 	  sdlRenderer(nullptr),
-	  running(false) {
+	  running(false),
+	  sdlInitialized(false) {
 }
 
 SdlApp::~SdlApp() {
+	shutdown();
+}
+
+void SdlApp::shutdown() {
 	if (sdlRenderer) {
 		SDL_DestroyRenderer(sdlRenderer);
 		sdlRenderer = nullptr;
@@ -21,20 +26,26 @@ SdlApp::~SdlApp() {
 		SDL_DestroyWindow(window);
 		window = nullptr;
 	}
-	SDL_Quit();
+	if (sdlInitialized) {
+		SDL_Quit();
+		sdlInitialized = false;
+	}
 }
 
 bool SdlApp::init() {
 	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
 		return false;
 	}
+	sdlInitialized = true;
 	window = SDL_CreateWindow("Gomoku", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 					 layout.windowWidth, layout.windowHeight, SDL_WINDOW_SHOWN);
 	if (!window) {
+		shutdown();
 		return false;
 	}
 	sdlRenderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 	if (!sdlRenderer) {
+		shutdown();
 		return false;
 	}
 	return true;
@@ -55,6 +66,7 @@ void SdlApp::run() {
 		render();
 		SDL_Delay(16);
 	}
+	shutdown();
 }
 
 void SdlApp::handleEvent(const SDL_Event& event) {
@@ -74,7 +86,13 @@ void SdlApp::handleEvent(const SDL_Event& event) {
 void SdlApp::render() {
 	SDL_SetRenderDrawColor(sdlRenderer, 210, 180, 140, 255);
 	SDL_RenderClear(sdlRenderer);
-	renderer.render(sdlRenderer, controller.state(), layout);
+	const Board* ghostBoard = nullptr;
+	Board ghostCopy;
+	if (controller.hasGhostBoard()) {
+		ghostCopy = controller.ghostBoard();
+		ghostBoard = &ghostCopy;
+	}
+	renderer.render(sdlRenderer, controller.state(), layout, ghostBoard);
 	SDL_RenderPresent(sdlRenderer);
 }
 

@@ -15,6 +15,12 @@ make
 ```
 ./Gomoku
 ```
+Optional player type overrides:
+```
+./Gomoku --black ai --white human
+./Gomoku -b human -w ai
+```
+Accepted values: `ai`, `ia`, `bot`, `human`, `player`.
 
 ## Controls
 - Left click to place a stone (human player only)

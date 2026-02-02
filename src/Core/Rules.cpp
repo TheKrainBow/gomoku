@@ -14,6 +14,21 @@ bool Rules::isLegal(const GameState& state, const Move& move, GameState::PlayerC
 		}
 		return false;
 	}
+	if (player == state.toMove && state.mustCapture) {
+		bool allowed = false;
+		for (const Move& forced : state.forcedCaptureMoves) {
+			if (forced == move) {
+				allowed = true;
+				break;
+			}
+		}
+		if (!allowed) {
+			if (reason) {
+				*reason = "must capture";
+			}
+			return false;
+		}
+	}
 	if (!state.board.isEmpty(move.x, move.y)) {
 		if (reason) {
 			*reason = "occupied";
@@ -155,6 +170,39 @@ bool Rules::opponentCanBreakAlignmentByCapture(const GameState& afterMoveState, 
 	return false;
 }
 
+std::vector<Move> Rules::findAlignmentBreakCaptures(const GameState& afterMoveState, GameState::PlayerColor opponent) const {
+	std::vector<Move> moves;
+	GameState probeState = afterMoveState;
+	probeState.toMove = opponent;
+	Board::Cell opponentCell = (opponent == GameState::PlayerColor::Black) ? Board::Cell::Black : Board::Cell::White;
+	Board::Cell targetCell = (opponent == GameState::PlayerColor::Black) ? Board::Cell::White : Board::Cell::Black;
+	int size = afterMoveState.board.getSize();
+	for (int y = 0; y < size; ++y) {
+		for (int x = 0; x < size; ++x) {
+			if (!afterMoveState.board.isEmpty(x, y)) {
+				continue;
+			}
+			Move move(x, y);
+			if (!isLegal(probeState, move, opponent)) {
+				continue;
+			}
+			Board boardCopy = afterMoveState.board;
+			boardCopy.set(x, y, opponentCell);
+			std::vector<Move> captures = findCaptures(boardCopy, move, opponentCell);
+			if (captures.empty()) {
+				continue;
+			}
+			for (const Move& cap : captures) {
+				boardCopy.remove(cap.x, cap.y);
+			}
+			if (!hasAnyAlignment(boardCopy, targetCell)) {
+				moves.push_back(move);
+			}
+		}
+	}
+	return moves;
+}
+
 bool Rules::findAlignmentLine(const Board& board, const Move& lastMove, std::vector<Move>& outLine) const {
 	outLine.clear();
 	if (!lastMove.isValid(settings.boardSize)) {
@@ -176,6 +224,14 @@ bool Rules::findAlignmentLine(const Board& board, const Move& lastMove, std::vec
 		}
 	}
 	return false;
+}
+
+int Rules::getWinLength() const {
+	return settings.winLength;
+}
+
+int Rules::getCaptureWinStones() const {
+	return settings.captureWinStones;
 }
 
 int Rules::countDirection(const Board& board, const Move& start, int dx, int dy) const {

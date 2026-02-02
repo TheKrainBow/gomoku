@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "AIScoring.hpp"
 Game::Game(const GameSettings& settingsIn)
 	: settings(settingsIn),
 	  rules(settingsIn),
@@ -41,6 +42,14 @@ bool Game::tryApplyMove(const Move& move) {
 	if (state.status != GameState::Status::Running) {
 		return false;
 	}
+	auto notifyAiCaches = [this]() {
+		if (AIPlayer* aiBlack = dynamic_cast<AIPlayer*>(blackPlayer.get())) {
+			aiBlack->onMoveApplied(state);
+		}
+		if (AIPlayer* aiWhite = dynamic_cast<AIPlayer*>(whitePlayer.get())) {
+			aiWhite->onMoveApplied(state);
+		}
+	};
 	IPlayer* player = currentPlayer();
 	bool isAiMove = (player && !player->isHuman());
 	std::string reason;
@@ -55,6 +64,8 @@ bool Game::tryApplyMove(const Move& move) {
 	state.board.set(move.x, move.y, cell);
 	state.lastMove = move;
 	state.hasLastMove = true;
+	state.mustCapture = false;
+	state.forcedCaptureMoves.clear();
 	MoveHistory::HistoryEntry entry;
 	entry.move = move;
 	entry.player = state.toMove;
@@ -74,12 +85,15 @@ bool Game::tryApplyMove(const Move& move) {
 	int totalCaptured = (state.toMove == GameState::PlayerColor::Black) ? state.capturedStonesBlack : state.capturedStonesWhite;
 	logMovePlayed(move, elapsedMs, isAiMove, totalCaptured, capturedCount);
 	history.push(entry);
+	bool requireCapture = false;
+	std::vector<Move> forcedCaptures;
 
 	int captureCount = (state.toMove == GameState::PlayerColor::Black) ? state.capturedStonesBlack : state.capturedStonesWhite;
 	if (captureCount >= settings.captureWinStones) {
 		logWin(state.toMove, "capture");
 		state.status = (state.toMove == GameState::PlayerColor::Black) ? GameState::Status::BlackWon : GameState::Status::WhiteWon;
 		state.winningLine.clear();
+		notifyAiCaches();
 		return true;
 	}
 
@@ -91,19 +105,28 @@ bool Game::tryApplyMove(const Move& move) {
 			rules.findAlignmentLine(state.board, move, state.winningLine);
 			logWin(state.toMove, "alignment");
 			state.status = (state.toMove == GameState::PlayerColor::Black) ? GameState::Status::BlackWon : GameState::Status::WhiteWon;
+			notifyAiCaches();
 			return true;
 		} else {
 			std::cout << "\033[33mAlignment formed but can be broken by capture.\033[0m" << std::endl;
+			forcedCaptures = rules.findAlignmentBreakCaptures(state, opponent);
+			requireCapture = !forcedCaptures.empty();
 		}
 	}
 	if (rules.isDraw(state.board)) {
 		std::cout << "\033[36mGame ends in a draw.\033[0m" << std::endl;
 		state.status = GameState::Status::Draw;
+		notifyAiCaches();
 		return true;
 	}
 
 	state.toMove = (state.toMove == GameState::PlayerColor::Black) ? GameState::PlayerColor::White : GameState::PlayerColor::Black;
+	if (requireCapture) {
+		state.mustCapture = true;
+		state.forcedCaptureMoves = forcedCaptures;
+	}
 	turnStartTime = std::chrono::steady_clock::now();
+	notifyAiCaches();
 	return true;
 }
 
@@ -122,6 +145,18 @@ void Game::tick() {
 			tryApplyMove(move);
 		}
 	} else {
+		AIPlayer* ai = dynamic_cast<AIPlayer*>(player);
+		if (ai) {
+			if (ai->hasMoveReady()) {
+				Move move = ai->takeMove();
+				tryApplyMove(move);
+				return;
+			}
+			if (!ai->isThinking()) {
+				ai->startThinking(state, rules);
+			}
+			return;
+		}
 		Move move = player->chooseMove(state, rules);
 		tryApplyMove(move);
 	}
@@ -211,6 +246,14 @@ void Game::logMovePlayed(const Move& move, double elapsedMs, bool isAiMove, int 
 		line << " \033[32m+" << capturedDelta << "!\033[0m";
 	}
 	std::cout << line.str() << std::endl;
+	std::size_t totalCache = 0;
+	if (const AIPlayer* aiBlack = dynamic_cast<const AIPlayer*>(blackPlayer.get())) {
+		totalCache += aiBlack->cacheSize();
+	}
+	if (const AIPlayer* aiWhite = dynamic_cast<const AIPlayer*>(whitePlayer.get())) {
+		totalCache += aiWhite->cacheSize();
+	}
+	std::cout << "\033[90mTT cache size: " << totalCache << "\033[0m" << std::endl;
 }
 
 void Game::logWin(GameState::PlayerColor player, const std::string& reason) const {
@@ -251,4 +294,28 @@ void Game::computeLogWidths() {
 	timeWidth = std::max(timeWidth, formatTime(999.9999).size());
 	timeWidth = std::max(timeWidth, formatTime(1000.0).size());
 	timeWidth = std::max(timeWidth, formatTime(9999.9999).size());
+}
+
+bool Game::hasGhostBoard() const {
+	const AIPlayer* aiBlack = dynamic_cast<const AIPlayer*>(blackPlayer.get());
+	if (aiBlack && aiBlack->hasGhostBoard()) {
+		return true;
+	}
+	const AIPlayer* aiWhite = dynamic_cast<const AIPlayer*>(whitePlayer.get());
+	if (aiWhite && aiWhite->hasGhostBoard()) {
+		return true;
+	}
+	return false;
+}
+
+Board Game::getGhostBoard() const {
+	const AIPlayer* aiBlack = dynamic_cast<const AIPlayer*>(blackPlayer.get());
+	if (aiBlack && aiBlack->hasGhostBoard()) {
+		return aiBlack->ghostBoardCopy();
+	}
+	const AIPlayer* aiWhite = dynamic_cast<const AIPlayer*>(whitePlayer.get());
+	if (aiWhite && aiWhite->hasGhostBoard()) {
+		return aiWhite->ghostBoardCopy();
+	}
+	return Board();
 }

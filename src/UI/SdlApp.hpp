@@ -24,10 +24,12 @@ private:
 	SDL_Window* window;
 	SDL_Renderer* sdlRenderer;
 	bool running;
+	bool sdlInitialized;
 
 	void handleEvent(const SDL_Event& event);
 	void render();
 	void updateTitle();
+	void shutdown();
 };
 
 #endif

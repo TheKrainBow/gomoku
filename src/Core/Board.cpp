@@ -1,4 +1,5 @@
 #include "Board.hpp"
+#include <cstddef>
 
 Board::Board() : size(0) {
 }
@@ -29,7 +30,8 @@ bool Board::isEmpty(int x, int y) const {
 
 int Board::countEmpty() const {
 	int count = 0;
-	for (size_t i = 0; i < cells.size(); ++i) {
+	std::size_t len = cells.size();
+	for (std::size_t i = 0; i < len; ++i) {
 		if (cells[i] == Cell::Empty) {
 			++count;
 		}
@@ -39,7 +41,7 @@ int Board::countEmpty() const {
 
 void Board::reset(int boardSize) {
 	size = boardSize;
-	cells.assign(static_cast<size_t>(size * size), Cell::Empty);
+	cells.assign(static_cast<std::size_t>(size * size), Cell::Empty);
 }
 
 int Board::getSize() const {

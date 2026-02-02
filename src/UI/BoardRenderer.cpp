@@ -2,9 +2,10 @@
 
 #include "CoordinateMapper.hpp"
 
-void BoardRenderer::render(SDL_Renderer* renderer, const GameState& state, const UiLayout& layout) {
+void BoardRenderer::render(SDL_Renderer* renderer, const GameState& state, const UiLayout& layout, const Board* ghostBoard) {
 	drawGrid(renderer, layout);
 	drawStones(renderer, state, layout);
+	drawGhostStones(renderer, state, layout, ghostBoard);
 }
 
 void BoardRenderer::drawGrid(SDL_Renderer* renderer, const UiLayout& layout) {
@@ -52,6 +53,31 @@ void BoardRenderer::drawStones(SDL_Renderer* renderer, const GameState& state, c
 			int py = 0;
 			mapper.cellToPixelCenter(move.x, move.y, px, py);
 			drawCircleOutline(renderer, px, py, layout.stoneRadius, winColor);
+		}
+	}
+}
+
+void BoardRenderer::drawGhostStones(SDL_Renderer* renderer, const GameState& state, const UiLayout& layout, const Board* ghostBoard) {
+	if (!ghostBoard) {
+		return;
+	}
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	CoordinateMapper mapper(layout);
+	int size = ghostBoard->getSize();
+	for (int y = 0; y < size; ++y) {
+		for (int x = 0; x < size; ++x) {
+			if (!state.board.isEmpty(x, y)) {
+				continue;
+			}
+			Board::Cell cell = ghostBoard->at(x, y);
+			if (cell == Board::Cell::Empty) {
+				continue;
+			}
+			int px = 0;
+			int py = 0;
+			mapper.cellToPixelCenter(x, y, px, py);
+			SDL_Color color = (cell == Board::Cell::Black) ? SDL_Color{20, 20, 20, 90} : SDL_Color{240, 240, 240, 90};
+			drawFilledCircle(renderer, px, py, layout.stoneRadius, color);
 		}
 	}
 }

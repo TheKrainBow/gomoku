@@ -18,3 +18,11 @@ const GameState& GameController::state() const {
 const MoveHistory& GameController::history() const {
 	return game.getHistory();
 }
+
+bool GameController::hasGhostBoard() const {
+	return game.hasGhostBoard();
+}
+
+Board GameController::ghostBoard() const {
+	return game.getGhostBoard();
+}
