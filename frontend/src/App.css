@@ -1,0 +1,266 @@
+:root {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: #111;
+  background: #ffffff;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.page {
+  width: 100%;
+  padding: 16px 24px;
+  height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.header h1 {
+  margin-bottom: 8px;
+  font-size: 32px;
+}
+
+.header {
+  flex: 0 0 auto;
+}
+
+.panel {
+  border: 1px solid #e6e6e6;
+  padding: 16px 20px;
+  border-radius: 12px;
+}
+
+.actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+button {
+  padding: 8px 14px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  background: #111111;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.danger {
+  background: #b21f2d;
+  border-color: #b21f2d;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #f3f3f3;
+}
+
+.pill.ok {
+  background: #e4f7e1;
+}
+
+.pill.error {
+  background: #ffe3e3;
+}
+
+.ghost-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ghost-preview {
+  margin-top: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+}
+
+.board {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--cell-gap, 2px);
+}
+
+.board-panel .board {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(280px, 360px);
+  gap: 16px;
+  height: calc(var(--page-height, 100vh) - 32px);
+  align-items: start;
+  min-height: 0;
+}
+
+.settings-panel,
+.history-panel {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 95%;
+}
+
+.panel-scroll {
+  overflow-y: auto;
+  padding-right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.board-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 12px;
+  min-width: 0;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid #efefef;
+  border-radius: 8px;
+}
+
+.history-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 600;
+  color: #222;
+  background: #f3f3f3;
+}
+
+.history-pill.player-1 {
+  background: #e7f0ff;
+}
+
+.history-pill.player-2 {
+  background: #ffe9e0;
+}
+
+.history-time {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.history-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #666;
+}
+
+.history-capture {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b21f2d;
+}
+
+.history-empty {
+  color: #666;
+  font-size: 13px;
+}
+
+.board-row {
+  display: flex;
+  gap: var(--cell-gap, 2px);
+}
+
+.board-cell {
+  width: var(--cell-size, 22px);
+  height: var(--cell-size, 22px);
+  border: 1px solid #e1e1e1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cell-size, 22px) * 0.55);
+  color: #333;
+}
+
+.board-cell.player-1 {
+  background: #e7f0ff;
+}
+
+.board-cell.player-2 {
+  background: #ffe9e0;
+}
+
+.board-cell.playable {
+  cursor: pointer;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.settings-panel .settings-grid {
+  grid-template-columns: 1fr;
+}
+
+.settings-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.settings-grid input,
+.settings-grid select {
+  padding: 6px 8px;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.settings-grid .toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
