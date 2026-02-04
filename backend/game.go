@@ -39,6 +39,12 @@ func (g *Game) Start() {
 	if g.state.Status == StatusNotStarted {
 		g.state.Status = StatusRunning
 		g.turnStart = time.Now()
+		if aiBlack, ok := g.blackPlayer.(*AIPlayer); ok {
+			aiBlack.OnMoveApplied(g.state, g.rules)
+		}
+		if aiWhite, ok := g.whitePlayer.(*AIPlayer); ok {
+			aiWhite.OnMoveApplied(g.state, g.rules)
+		}
 	}
 }
 
@@ -54,12 +60,15 @@ func (g *Game) TryApplyMove(move Move) (bool, string) {
 	if g.state.Status != StatusRunning {
 		return false, "game not running"
 	}
+	prevCapturedBlack := g.state.CapturedBlack
+	prevCapturedWhite := g.state.CapturedWhite
+	prevToMove := g.state.ToMove
 	notifyAiCaches := func() {
 		if aiBlack, ok := g.blackPlayer.(*AIPlayer); ok {
-			aiBlack.OnMoveApplied(g.state)
+			aiBlack.OnMoveApplied(g.state, g.rules)
 		}
 		if aiWhite, ok := g.whitePlayer.(*AIPlayer); ok {
-			aiWhite.OnMoveApplied(g.state)
+			aiWhite.OnMoveApplied(g.state, g.rules)
 		}
 	}
 	player := g.currentPlayer()
@@ -115,6 +124,7 @@ func (g *Game) TryApplyMove(move Move) (bool, string) {
 			g.state.Status = StatusWhiteWon
 		}
 		g.state.WinningLine = nil
+		UpdateHashAfterMove(&g.state, move, prevToMove, entry.CapturedPositions, prevToMove, prevCapturedBlack, prevCapturedWhite)
 		notifyAiCaches()
 		return true, ""
 	}
@@ -132,6 +142,7 @@ func (g *Game) TryApplyMove(move Move) (bool, string) {
 			} else {
 				g.state.Status = StatusWhiteWon
 			}
+			UpdateHashAfterMove(&g.state, move, prevToMove, entry.CapturedPositions, prevToMove, prevCapturedBlack, prevCapturedWhite)
 			notifyAiCaches()
 			return true, ""
 		}
@@ -140,11 +151,13 @@ func (g *Game) TryApplyMove(move Move) (bool, string) {
 	}
 	if g.rules.IsDraw(g.state.Board) {
 		g.state.Status = StatusDraw
+		UpdateHashAfterMove(&g.state, move, prevToMove, entry.CapturedPositions, prevToMove, prevCapturedBlack, prevCapturedWhite)
 		notifyAiCaches()
 		return true, ""
 	}
 
 	g.state.ToMove = otherPlayer(g.state.ToMove)
+	UpdateHashAfterMove(&g.state, move, prevToMove, entry.CapturedPositions, prevToMove, prevCapturedBlack, prevCapturedWhite)
 	if requireCapture {
 		g.state.MustCapture = true
 		g.state.ForcedCaptureMoves = forcedCaptures
@@ -175,6 +188,10 @@ func (g *Game) Tick(ghostEnabled bool, ghostSink func(Board)) bool {
 	if ok {
 		if ai.HasMoveReady() {
 			move := ai.TakeMove()
+			applied, _ := g.TryApplyMove(move)
+			return applied
+		}
+		if move, ok := ai.TakePonderedMove(g.state.Clone(), g.rules); ok {
 			applied, _ := g.TryApplyMove(move)
 			return applied
 		}
@@ -227,12 +244,12 @@ func (g *Game) createPlayers() {
 	if g.settings.BlackType == PlayerHuman {
 		g.blackPlayer = NewHumanPlayer()
 	} else {
-		g.blackPlayer = NewAIPlayer(g.settings.AiMoveDelayMs)
+		g.blackPlayer = NewAIPlayer()
 	}
 	if g.settings.WhiteType == PlayerHuman {
 		g.whitePlayer = NewHumanPlayer()
 	} else {
-		g.whitePlayer = NewAIPlayer(g.settings.AiMoveDelayMs)
+		g.whitePlayer = NewAIPlayer()
 	}
 }
 
