@@ -33,3 +33,4 @@ This file tracks AI-assisted changes and serves as context for future agents. Up
 
 ## Latest update
 - Added per-player AI caches with re-rooting, PV move ordering from TT, cache size logging, and forced-capture enforcement when alignment can be broken by capture.
+- Added Docker launcher and lifecycle workflow (`gomoku` + Makefile targets) and rewrote `README.md` to document the Go web stack instead of C++/SDL flow.
