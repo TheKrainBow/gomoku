@@ -34,3 +34,7 @@ This file tracks AI-assisted changes and serves as context for future agents. Up
 ## Latest update
 - Added per-player AI caches with re-rooting, PV move ordering from TT, cache size logging, and forced-capture enforcement when alignment can be broken by capture.
 - Added Docker launcher and lifecycle workflow (`gomoku` + Makefile targets) and rewrote `README.md` to document the Go web stack instead of C++/SDL flow.
+- Replaced SDL entrypoint with a Crow backend server exposing REST routes (`/api/v1/game/*`) and WebSocket state streaming (`/ws`), added server-side tick loop for AI turns, and updated build/docs for backend-only workflow.
+- Refactored backend game progression to event-driven mode: removed global ticker loop, added single-worker AI orchestration with revision-safe commit/discard, and added throttled WebSocket `ai_think` snapshots (depth/nodes/topK/PV) plus `ai_done` events.
+- Simplified Crow handling: `src/main.cpp` now assumes Crow is present (no runtime fallback branch), and `Makefile` now fails early with a clear error if Crow headers are missing from known include paths.
+- Updated build to auto-install Crow locally with CMake when headers are missing (`make` now runs `crow-install` and installs to `third_party/crow/install`).
