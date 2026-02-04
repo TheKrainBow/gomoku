@@ -1,0 +1,2 @@
+- visualize AI thought process -> percentage or another kind of display
+- chess.com history checkpoint
