@@ -41,4 +41,6 @@
 *.dwo
 
 Gomoku
+GomokuServer
+third_party/crow/
 .vscode
