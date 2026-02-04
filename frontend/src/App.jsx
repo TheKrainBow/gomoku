@@ -9,7 +9,6 @@ const defaultStatus = {
     ai_timeout_ms: 0,
     ai_top_candidates: 6,
     ai_quick_win_exit: true,
-    ai_move_delay_ms: 0,
     ai_tt_max_entries: 200000
   },
   board: [],
@@ -390,15 +389,6 @@ export default function App() {
                   min="1"
                   value={status.config.ai_top_candidates}
                   onChange={(event) => handleSettingsChange('ai_top_candidates', Number(event.target.value))}
-                />
-              </label>
-              <label>
-                Move delay (ms)
-                <input
-                  type="number"
-                  min="0"
-                  value={status.config.ai_move_delay_ms}
-                  onChange={(event) => handleSettingsChange('ai_move_delay_ms', Number(event.target.value))}
                 />
               </label>
               <label>

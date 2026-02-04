@@ -25,6 +25,7 @@ type GameState struct {
 	LastMove           Move
 	CapturedBlack      int
 	CapturedWhite      int
+	Hash               uint64
 	MustCapture        bool
 	ForcedCaptureMoves []Move
 	LastMessage        string
@@ -49,10 +50,12 @@ func (s *GameState) Reset(settings GameSettings) {
 	s.LastMove = Move{X: -1, Y: -1}
 	s.CapturedBlack = 0
 	s.CapturedWhite = 0
+	s.Hash = 0
 	s.MustCapture = false
 	s.ForcedCaptureMoves = nil
 	s.LastMessage = ""
 	s.WinningLine = nil
+	s.Hash = ComputeHash(*s)
 }
 
 func (s GameState) Clone() GameState {
