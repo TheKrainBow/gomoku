@@ -264,3 +264,37 @@ button.danger {
   align-items: center;
   gap: 8px;
 }
+
+.home-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.home-card {
+  width: min(560px, 100%);
+  border: 1px solid #e6e6e6;
+  border-radius: 14px;
+  padding: 28px;
+  background: #ffffff;
+}
+
+.home-kicker {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #666;
+}
+
+.home-card h1 {
+  margin: 10px 0 8px;
+  font-size: 34px;
+}
+
+.home-copy {
+  margin: 0 0 18px;
+  color: #555;
+}
