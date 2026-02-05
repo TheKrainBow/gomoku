@@ -26,6 +26,8 @@ type GameState struct {
 	CapturedBlack      int
 	CapturedWhite      int
 	Hash               uint64
+	HashSym            [8]uint64
+	CanonHash          uint64
 	MustCapture        bool
 	ForcedCaptureMoves []Move
 	LastMessage        string
@@ -51,11 +53,13 @@ func (s *GameState) Reset(settings GameSettings) {
 	s.CapturedBlack = 0
 	s.CapturedWhite = 0
 	s.Hash = 0
+	s.HashSym = [8]uint64{}
+	s.CanonHash = 0
 	s.MustCapture = false
 	s.ForcedCaptureMoves = nil
 	s.LastMessage = ""
 	s.WinningLine = nil
-	s.Hash = ComputeHash(*s)
+	s.recomputeHashes()
 }
 
 func (s GameState) Clone() GameState {
@@ -71,4 +75,11 @@ func otherPlayer(player PlayerColor) PlayerColor {
 		return PlayerWhite
 	}
 	return PlayerBlack
+}
+
+func (s *GameState) recomputeHashes() {
+	hash, sym := computeSymmetricHashes(*s)
+	s.Hash = hash
+	s.HashSym = sym
+	s.CanonHash = canonicalSymHash(sym)
 }

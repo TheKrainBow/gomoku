@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    allowedHosts: ['localhost', 'gomoku-nginx', 'frontend'],
+    allowedHosts: ['localhost', 'gomoku-nginx', 'frontend', 'dev.maagosti.fr'],
     hmr: {
-      host: 'localhost',
-      clientPort: 80,
-      protocol: 'ws'
+      host: 'dev.maagosti.fr',
+      clientPort: 8080,
+      protocol: 'wss'
     }
   }
 })

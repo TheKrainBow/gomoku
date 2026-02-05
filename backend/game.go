@@ -87,7 +87,7 @@ func (g *Game) TryApplyMove(move Move) (bool, string) {
 	g.state.MustCapture = false
 	g.state.ForcedCaptureMoves = nil
 
-	entry := HistoryEntry{Move: move, Player: g.state.ToMove, ElapsedMs: elapsedMs, IsAi: isAiMove}
+	entry := HistoryEntry{Move: move, Player: g.state.ToMove, ElapsedMs: elapsedMs, IsAi: isAiMove, Depth: move.Depth}
 	entry.CapturedPositions = g.rules.FindCaptures(g.state.Board, move, cell)
 	entry.CapturedCount = len(entry.CapturedPositions)
 	for _, captured := range entry.CapturedPositions {

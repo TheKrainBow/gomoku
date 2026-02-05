@@ -65,6 +65,7 @@ func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
 		logSearchStats("choose", stats, settings)
 	}
 	if ok {
+		bestMove.Depth = stats.CompletedDepths
 		return bestMove
 	}
 	return Move{}
@@ -133,6 +134,7 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 		}
 		a.moveMutex.Lock()
 		if ok {
+			bestMove.Depth = stats.CompletedDepths
 			a.readyMove = bestMove
 		} else {
 			a.readyMove = Move{}
@@ -217,7 +219,7 @@ func (a *AIPlayer) startPonderWorker() {
 				continue
 			}
 			if state.Hash == 0 {
-				state.Hash = ComputeHash(state)
+				state.recomputeHashes()
 			}
 			stats := &SearchStats{Start: time.Now()}
 			settings := AIScoreSettings{
@@ -241,6 +243,7 @@ func (a *AIPlayer) startPonderWorker() {
 				logSearchStats("ponder", stats, settings)
 			}
 			if ok {
+				bestMove.Depth = stats.CompletedDepths
 				key := ttKeyFor(state, settings.BoardSize)
 				a.ponderMu.Lock()
 				if a.ponderVersion.Load() == version {
@@ -260,7 +263,7 @@ func (a *AIPlayer) updatePonderState(state GameState, rules Rules) {
 		return
 	}
 	if state.Hash == 0 {
-		state.Hash = ComputeHash(state)
+		state.recomputeHashes()
 	}
 	a.ponderMu.Lock()
 	a.ponderState = state.Clone()
@@ -276,7 +279,7 @@ func (a *AIPlayer) TakePonderedMove(state GameState, rules Rules) (Move, bool) {
 		return Move{}, false
 	}
 	if state.Hash == 0 {
-		state.Hash = ComputeHash(state)
+		state.recomputeHashes()
 	}
 	key := ttKeyFor(state, state.Board.Size())
 	a.ponderMu.Lock()

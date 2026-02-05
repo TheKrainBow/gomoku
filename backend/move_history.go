@@ -7,6 +7,7 @@ type HistoryEntry struct {
 	ElapsedMs         float64
 	IsAi              bool
 	CapturedCount     int
+	Depth             int
 }
 
 type MoveHistory struct {

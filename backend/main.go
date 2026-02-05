@@ -23,7 +23,8 @@ type StatusResponse struct {
 }
 
 type GameSettingsDTO struct {
-	Mode string `json:"mode"`
+	Mode        string `json:"mode"`
+	HumanPlayer int    `json:"human_player"`
 }
 
 type apiMove struct {
@@ -41,6 +42,7 @@ type historyEntryDTO struct {
 	CapturedCount     int          `json:"captured_count"`
 	CapturedPositions []Move       `json:"captured_positions"`
 	Changes           []cellChange `json:"changes"`
+	Depth             int          `json:"depth"`
 }
 
 type changesPayload struct {
@@ -72,6 +74,7 @@ type settingsPayload struct {
 
 func main() {
 	controller := NewGameController(DefaultGameSettings())
+	startSearchBacklogWorker(controller)
 	hub := NewHub()
 	ghostHub := NewGhostHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,6 +130,7 @@ func main() {
 			return
 		}
 		settings := settingsFromDTO(payload.Settings, DefaultGameSettings())
+		searchBacklogManager.RequestStop()
 		controller.StartGame(settings)
 		writeJSON(w, http.StatusOK, controllerStatus(controller))
 		hub.broadcastReset <- resetFromController(controller)
@@ -134,6 +138,7 @@ func main() {
 
 	r.Post("/api/stop", func(w http.ResponseWriter, r *http.Request) {
 		settings := controller.Settings()
+		searchBacklogManager.RequestStop()
 		controller.Reset(settings)
 		writeJSON(w, http.StatusOK, controllerStatus(controller))
 		hub.broadcastReset <- resetFromController(controller)
@@ -174,6 +179,7 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 			return
 		}
+		searchBacklogManager.RequestStop()
 		if entry, ok := controller.LatestHistoryEntry(); ok {
 			hub.broadcastHistory <- historyPayload{History: []historyEntryDTO{historyEntryToDTO(entry)}}
 		}
@@ -189,6 +195,7 @@ func main() {
 
 	log.Println("backend listening on :8080")
 	if err := http.ListenAndServe(":8080", r); err != nil {
+		persistCaches()
 		log.Fatal(err)
 	}
 }
@@ -256,8 +263,13 @@ func settingsFromDTO(dto GameSettingsDTO, base GameSettings) GameSettings {
 		settings.BlackType = PlayerHuman
 		settings.WhiteType = PlayerHuman
 	case "ai_vs_human":
-		settings.BlackType = PlayerHuman
-		settings.WhiteType = PlayerAI
+		if dto.HumanPlayer == 2 {
+			settings.BlackType = PlayerAI
+			settings.WhiteType = PlayerHuman
+		} else {
+			settings.BlackType = PlayerHuman
+			settings.WhiteType = PlayerAI
+		}
 	}
 	return settings
 }
@@ -271,7 +283,15 @@ func controllerSettingsDTO(settings GameSettings) GameSettingsDTO {
 	} else if settings.BlackType != settings.WhiteType {
 		mode = "ai_vs_human"
 	}
-	return GameSettingsDTO{Mode: mode}
+	humanPlayer := 0
+	if settings.BlackType == PlayerHuman && settings.WhiteType != PlayerHuman {
+		humanPlayer = 1
+	} else if settings.WhiteType == PlayerHuman && settings.BlackType != PlayerHuman {
+		humanPlayer = 2
+	} else if settings.BlackType == PlayerHuman && settings.WhiteType == PlayerHuman {
+		humanPlayer = 1
+	}
+	return GameSettingsDTO{Mode: mode, HumanPlayer: humanPlayer}
 }
 
 func boardToSlice(board Board) [][]int {
@@ -350,6 +370,7 @@ func historyEntryToDTO(entry HistoryEntry) historyEntryDTO {
 		CapturedCount:     entry.CapturedCount,
 		CapturedPositions: append([]Move(nil), entry.CapturedPositions...),
 		Changes:           changesFromEntry(entry),
+		Depth:             entry.Depth,
 	}
 }
 

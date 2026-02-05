@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const defaultStatus = {
-  settings: { mode: 'ai_vs_human' },
+  settings: { mode: 'ai_vs_human', human_player: 1 },
   config: {
     ghost_mode: true,
     log_depth_scores: false,
@@ -29,6 +29,329 @@ function wsUrl(path) {
 }
 
 export default function App() {
+  const [ping, setPing] = useState('pending')
+  const [status, setStatus] = useState(defaultStatus)
+  const [startBusy, setStartBusy] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [moveBusy, setMoveBusy] = useState(false)
+  const [cellSize, setCellSize] = useState(24)
+  const [cellGap, setCellGap] = useState(2)
+  const [board, setBoard] = useState([])
+  const wsRef = useRef(null)
+  const ghostWsRef = useRef(null)
+  const boardPanelRef = useRef(null)
+  const pageRef = useRef(null)
+
+  useEffect(() => {
+    fetch('/api/ping')
+      .then((res) => res.json())
+      .then((data) => setPing(data.ok ? 'ok' : 'error'))
+      .catch(() => setPing('error'))
+
+    fetch('/api/status')
+      .then((res) => res.json())
+      .then((data) => {
+        setStatus(data)
+        setBoard(buildBoardFromHistory(data.history || [], data.board_size || 19))
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const panel = boardPanelRef.current
+    if (!panel) return
+
+    const updateSize = () => {
+      const rect = panel.getBoundingClientRect()
+      const style = window.getComputedStyle(panel)
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+      const availableWidth = Math.max(0, rect.width - padX)
+      const availableHeight = Math.max(0, rect.height - padY)
+      const size = status.board_size || 19
+      const gap = 2
+      const maxByWidth = Math.floor((availableWidth - gap * (size - 1)) / size)
+      const maxByHeight = Math.floor((availableHeight - gap * (size - 1)) / size)
+      const maxSize = Math.max(10, Math.min(maxByWidth, maxByHeight))
+      setCellGap(gap)
+      setCellSize(Math.min(32, Math.max(12, maxSize)))
+    }
+
+    updateSize()
+    const observer = new ResizeObserver(updateSize)
+    observer.observe(panel)
+    window.addEventListener('resize', updateSize)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateSize)
+    }
+  }, [status.board_size])
+
+  useEffect(() => {
+    const page = pageRef.current
+    if (!page) return
+
+    const updatePage = () => {
+      const rect = page.getBoundingClientRect()
+      document.documentElement.style.setProperty('--page-height', `${rect.height}px`)
+      document.documentElement.style.setProperty('--page-top', `${rect.top}px`)
+    }
+
+    updatePage()
+    const observer = new ResizeObserver(updatePage)
+    observer.observe(page)
+    window.addEventListener('resize', updatePage)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updatePage)
+    }
+  }, [])
+
+  useEffect(() => {
+    const ws = new WebSocket(wsUrl('/ws/'))
+    wsRef.current = ws
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'status') {
+        setStatus(msg.payload)
+        setBoard(buildBoardFromHistory(msg.payload.history || [], msg.payload.board_size || 19))
+      }
+      if (msg.type === 'history') {
+        setStatus((prev) => ({
+          ...prev,
+          history: [...prev.history, ...(msg.payload.history || [])],
+          move_count: prev.move_count + (msg.payload.history ? msg.payload.history.length : 0),
+          next_player: (() => {
+            if (msg.payload.history && msg.payload.history.length > 0) {
+              const last = msg.payload.history[msg.payload.history.length - 1]
+              return last.player === 1 ? 2 : 1
+            }
+            return prev.next_player
+          })()
+        }))
+        setBoard((prev) => applyHistoryChanges(prev, msg.payload.history || [], status.board_size || 19))
+      }
+      if (msg.type === 'reset') {
+        setStatus((prev) => ({
+          ...prev,
+          next_player: msg.payload.next_player,
+          winner: msg.payload.winner,
+          status: msg.payload.status,
+          history: msg.payload.history || [],
+          move_count: msg.payload.history ? msg.payload.history.length : 0,
+          board_size: msg.payload.board_size || prev.board_size
+        }))
+        setBoard(buildBoardFromHistory(msg.payload.history || [], msg.payload.board_size || status.board_size || 19))
+      }
+      if (msg.type === 'settings') {
+        setStatus((prev) => ({
+          ...prev,
+          settings: msg.payload.settings || prev.settings,
+          config: msg.payload.config || prev.config
+        }))
+      }
+    }
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'request_status' }))
+    }
+
+    return () => {
+      ws.close()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!status.config.ghost_mode) {
+      if (ghostWsRef.current) {
+        ghostWsRef.current.close()
+        ghostWsRef.current = null
+      }
+      return
+    }
+    const ghostWs = new WebSocket(wsUrl('/ws/ghost'))
+    ghostWsRef.current = ghostWs
+    ghostWs.onmessage = () => {}
+    ghostWs.onerror = () => {}
+    return () => {
+      ghostWs.close()
+      ghostWsRef.current = null
+    }
+  }, [status.config.ghost_mode])
+
+  useEffect(() => {
+  }, [])
+
+  const humanPlayer =
+    status.settings.human_player && status.settings.human_player > 0
+      ? status.settings.human_player
+      : 1
+  const boardRows = useMemo(() => {
+    if (!board || board.length === 0) {
+      return null
+    }
+    const isHumanTurn =
+      status.settings.mode === 'human_vs_human' ||
+      (status.settings.mode === 'ai_vs_human' && status.next_player === humanPlayer)
+    return board.map((row, rowIndex) => (
+        <div className="board-row" key={`row-${rowIndex}`}>
+        {row.map((cell, colIndex) => (
+          <div
+            className={`board-cell player-${cell} ${
+              cell === 0 && status.winner === 0 && isHumanTurn ? 'playable' : ''
+            }`}
+            key={`cell-${rowIndex}-${colIndex}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => handleCellClick(colIndex, rowIndex)}
+          >
+            {cell === 0 ? '' : cell}
+          </div>
+        ))}
+      </div>
+    ))
+  }, [board, status.settings.mode, status.next_player, status.winner, humanPlayer])
+
+  const canStart = status.status !== 'running'
+  const canPlay =
+    status.status === 'running' &&
+    status.winner === 0 &&
+    (status.settings.mode === 'human_vs_human' ||
+      (status.settings.mode === 'ai_vs_human' && status.next_player === humanPlayer))
+
+  const formatDuration = (msValue) => {
+    if (msValue == null) return ''
+    if (msValue < 1000) return `${msValue.toFixed(0)} ms`
+    const seconds = msValue / 1000
+    if (seconds < 60) return `${seconds.toFixed(2)} s`
+    const minutes = seconds / 60
+    if (minutes < 60) return `${minutes.toFixed(2)} min`
+    const hours = minutes / 60
+    return `${hours.toFixed(2)} h`
+  }
+
+  const captured = useMemo(() => {
+    let black = 0
+    let white = 0
+    for (const entry of status.history || []) {
+      if (entry.captured_count) {
+        if (entry.player === 1) {
+          black += entry.captured_count
+        } else if (entry.player === 2) {
+          white += entry.captured_count
+        }
+      }
+    }
+    return { black, white }
+  }, [status.history])
+
+  const handleStart = async () => {
+    if (!canStart || startBusy) {
+      return
+    }
+    setStartBusy(true)
+    try {
+      const res = await fetch('/api/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: status.settings })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setStatus(data)
+      }
+    } finally {
+      setStartBusy(false)
+    }
+  }
+
+  const handleSettingsChange = (field, value) => {
+    setStatus((prev) => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        [field]: value
+      }
+    }))
+  }
+
+  const handleModeChange = (value) => {
+    setStatus((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        mode: value,
+        human_player: value === 'ai_vs_human' ? prev.settings.human_player || 1 : 0
+      }
+    }))
+  }
+
+  const handleApplySettings = async () => {
+    if (settingsBusy) {
+      return
+    }
+    setSettingsBusy(true)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: status.settings,
+          config: status.config
+        })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setStatus(data)
+      }
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+
+  const handleStop = async () => {
+    if (startBusy) {
+      return
+    }
+    setStartBusy(true)
+    try {
+      const res = await fetch('/api/stop', { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        setStatus(data)
+      }
+    } finally {
+      setStartBusy(false)
+    }
+  }
+
+  const handleCellClick = async (x, y) => {
+    if (!canPlay || moveBusy) {
+      return
+    }
+    if (!board || board.length === 0) {
+      return
+    }
+    if (board[y][x] !== 0) {
+      return
+    }
+    setMoveBusy(true)
+    try {
+      const res = await fetch('/api/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y, player: status.next_player })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setStatus(data)
+      }
+    } finally {
+      setMoveBusy(false)
+    }
+  }
+
   return (
     <div className="page" ref={pageRef}>
       <div className="layout">
@@ -162,8 +485,9 @@ export default function App() {
                 <span>
                   ({entry.x}, {entry.y})
                 </span>
-                <span className="history-time">{formatDuration(entry.elapsed_ms)}</span>
-                <span className="history-type">{entry.is_ai ? 'AI' : 'Human'}</span>
+            <span className="history-time">{formatDuration(entry.elapsed_ms)}</span>
+            <span className="history-depth">Depth {entry.depth || '-'}</span>
+            <span className="history-type">{entry.is_ai ? 'AI' : 'Human'}</span>
                 {entry.captured_count > 0 && (
                   <span className="history-capture">+{entry.captured_count}</span>
                 )}
