@@ -4,6 +4,8 @@ services:
       context: ./backend
     container_name: gomoku-backend
     restart: unless-stopped
+    volumes:
+      - ./logs/backend-cache:/cache_logs
     networks:
       - gomoku-net
 

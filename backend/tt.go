@@ -10,14 +10,25 @@ const (
 	TTUpper
 )
 
+type translationGuard struct {
+	Left   int
+	Right  int
+	Top    int
+	Bottom int
+}
+
 type TTEntry struct {
-	Key      uint64
-	Depth    int
-	Value    float64
-	Flag     TTFlag
-	BestMove Move
-	Gen      uint32
-	Valid    bool
+	Key            uint64
+	Depth          int
+	Value          float64
+	Flag           TTFlag
+	BestMove       Move
+	Gen            uint32
+	Valid          bool
+	RequiredLeft   int
+	RequiredRight  int
+	RequiredTop    int
+	RequiredBottom int
 }
 
 type TranspositionTable struct {
@@ -68,6 +79,14 @@ func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
 }
 
 func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag TTFlag, best Move) (replaced bool, overwrote bool) {
+	return tt.storeEntry(key, depth, value, flag, best, translationGuard{})
+}
+
+func (tt *TranspositionTable) StoreWithGuard(key uint64, depth int, value float64, flag TTFlag, best Move, guard translationGuard) (replaced bool, overwrote bool) {
+	return tt.storeEntry(key, depth, value, flag, best, guard)
+}
+
+func (tt *TranspositionTable) storeEntry(key uint64, depth int, value float64, flag TTFlag, best Move, guard translationGuard) (replaced bool, overwrote bool) {
 	start := tt.bucketIndex(key)
 	victim := -1
 	oldestAge := uint32(0)
@@ -77,7 +96,19 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 		entry := tt.entries[idx]
 		if entry.Valid && entry.Key == key {
 			if shouldReplace(entry, depth, flag, tt.gen) {
-				tt.entries[idx] = TTEntry{Key: key, Depth: depth, Value: value, Flag: flag, BestMove: best, Gen: tt.gen, Valid: true}
+				tt.entries[idx] = TTEntry{
+					Key:            key,
+					Depth:          depth,
+					Value:          value,
+					Flag:           flag,
+					BestMove:       best,
+					Gen:            tt.gen,
+					Valid:          true,
+					RequiredLeft:   guard.Left,
+					RequiredRight:  guard.Right,
+					RequiredTop:    guard.Top,
+					RequiredBottom: guard.Bottom,
+				}
 				return false, true
 			}
 			return false, false
@@ -94,7 +125,19 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 		}
 	}
 	if victim >= 0 {
-		tt.entries[victim] = TTEntry{Key: key, Depth: depth, Value: value, Flag: flag, BestMove: best, Gen: tt.gen, Valid: true}
+		tt.entries[victim] = TTEntry{
+			Key:            key,
+			Depth:          depth,
+			Value:          value,
+			Flag:           flag,
+			BestMove:       best,
+			Gen:            tt.gen,
+			Valid:          true,
+			RequiredLeft:   guard.Left,
+			RequiredRight:  guard.Right,
+			RequiredTop:    guard.Top,
+			RequiredBottom: guard.Bottom,
+		}
 		return true, false
 	}
 	return false, false

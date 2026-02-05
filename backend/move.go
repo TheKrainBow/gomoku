@@ -1,8 +1,9 @@
 package main
 
 type Move struct {
-	X int `json:"x"`
-	Y int `json:"y"`
+	X     int `json:"x"`
+	Y     int `json:"y"`
+	Depth int `json:"depth,omitempty"`
 }
 
 func NewMove(x, y int) Move {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const defaultStatus = {
-  settings: { mode: 'ai_vs_human' },
+  settings: { mode: 'ai_vs_human', human_player: 1 },
   config: {
     ghost_mode: true,
     log_depth_scores: false,
@@ -121,7 +121,14 @@ export default function App() {
         setStatus((prev) => ({
           ...prev,
           history: [...prev.history, ...(msg.payload.history || [])],
-          move_count: prev.move_count + (msg.payload.history ? msg.payload.history.length : 0)
+          move_count: prev.move_count + (msg.payload.history ? msg.payload.history.length : 0),
+          next_player: (() => {
+            if (msg.payload.history && msg.payload.history.length > 0) {
+              const last = msg.payload.history[msg.payload.history.length - 1]
+              return last.player === 1 ? 2 : 1
+            }
+            return prev.next_player
+          })()
         }))
         setBoard((prev) => applyHistoryChanges(prev, msg.payload.history || [], status.board_size || 19))
       }
@@ -176,15 +183,19 @@ export default function App() {
   useEffect(() => {
   }, [])
 
+  const humanPlayer =
+    status.settings.human_player && status.settings.human_player > 0
+      ? status.settings.human_player
+      : 1
   const boardRows = useMemo(() => {
     if (!board || board.length === 0) {
       return null
     }
     const isHumanTurn =
       status.settings.mode === 'human_vs_human' ||
-      (status.settings.mode === 'ai_vs_human' && status.next_player === 1)
+      (status.settings.mode === 'ai_vs_human' && status.next_player === humanPlayer)
     return board.map((row, rowIndex) => (
-      <div className="board-row" key={`row-${rowIndex}`}>
+        <div className="board-row" key={`row-${rowIndex}`}>
         {row.map((cell, colIndex) => (
           <div
             className={`board-cell player-${cell} ${
@@ -200,14 +211,14 @@ export default function App() {
         ))}
       </div>
     ))
-  }, [board, status.settings.mode, status.next_player, status.winner])
+  }, [board, status.settings.mode, status.next_player, status.winner, humanPlayer])
 
   const canStart = status.status !== 'running'
   const canPlay =
     status.status === 'running' &&
     status.winner === 0 &&
     (status.settings.mode === 'human_vs_human' ||
-      (status.settings.mode === 'ai_vs_human' && status.next_player === 1))
+      (status.settings.mode === 'ai_vs_human' && status.next_player === humanPlayer))
 
   const formatDuration = (msValue) => {
     if (msValue == null) return ''
@@ -270,7 +281,8 @@ export default function App() {
       ...prev,
       settings: {
         ...prev.settings,
-        mode: value
+        mode: value,
+        human_player: value === 'ai_vs_human' ? prev.settings.human_player || 1 : 0
       }
     }))
   }
@@ -473,8 +485,9 @@ export default function App() {
                 <span>
                   ({entry.x}, {entry.y})
                 </span>
-                <span className="history-time">{formatDuration(entry.elapsed_ms)}</span>
-                <span className="history-type">{entry.is_ai ? 'AI' : 'Human'}</span>
+            <span className="history-time">{formatDuration(entry.elapsed_ms)}</span>
+            <span className="history-depth">Depth {entry.depth || '-'}</span>
+            <span className="history-type">{entry.is_ai ? 'AI' : 'Human'}</span>
                 {entry.captured_count > 0 && (
                   <span className="history-capture">+{entry.captured_count}</span>
                 )}

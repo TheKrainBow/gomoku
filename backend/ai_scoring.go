@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"math"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -12,18 +17,94 @@ const (
 	winScore     = 2000000000.0
 )
 
+const (
+	boardCacheLogPath  = "/cache_logs/cached_boards.log"
+	minmaxCacheLogPath = "/cache_logs/cached_minmax.log"
+)
+
+type boardArea struct {
+	minX int
+	minY int
+	maxX int
+	maxY int
+}
+
+func (a boardArea) width() int {
+	if a.maxX < a.minX {
+		return 0
+	}
+	return a.maxX - a.minX + 1
+}
+
+func (a boardArea) height() int {
+	if a.maxY < a.minY {
+		return 0
+	}
+	return a.maxY - a.minY + 1
+}
+
+func computePlayableArea(board Board, boardSize, margin int) boardArea {
+	bbox := computeBBox(board, boardSize)
+	if bbox.stones == 0 {
+		return boardArea{
+			minX: 0,
+			minY: 0,
+			maxX: boardSize - 1,
+			maxY: boardSize - 1,
+		}
+	}
+	minX := bbox.minX - margin
+	minY := bbox.minY - margin
+	maxX := bbox.maxX + margin
+	maxY := bbox.maxY + margin
+	if minX < 0 {
+		minX = 0
+	}
+	if minY < 0 {
+		minY = 0
+	}
+	if maxX >= boardSize {
+		maxX = boardSize - 1
+	}
+	if maxY >= boardSize {
+		maxY = boardSize - 1
+	}
+	return boardArea{
+		minX: minX,
+		minY: minY,
+		maxX: maxX,
+		maxY: maxY,
+	}
+}
+
+var (
+	boardCache        = newBoardScoreCache()
+	boardLogMu        sync.Mutex
+	minmaxLogMu       sync.Mutex
+	depthCacheWarned  bool
+	loggedBoardHashes = make(map[uint64]struct{})
+	loggedBoardMu     sync.Mutex
+)
+
+func init() {
+	loadLoggedBoardHashes()
+}
+
 type AISearchCache struct {
-	TT                *TranspositionTable
-	MoveCache         map[MoveCacheKey]float64
-	ImmediateWinMove  map[ImmediateWinKey]bool
-	ImmediateWinState map[ImmediateWinStateKey]bool
-	Edges             map[StateKey][]StateKey
-	Root              StateKey
-	HasRoot           bool
-	TTSize            int
-	TTBuckets         int
-	EvalCache         *EvalCache
-	EvalCacheSize     int
+	TT                  *TranspositionTable
+	TranslatedTT        *TranspositionTable
+	MoveCache           map[MoveCacheKey]float64
+	ImmediateWinMove    map[ImmediateWinKey]bool
+	ImmediateWinState   map[ImmediateWinStateKey]bool
+	Edges               map[StateKey][]StateKey
+	Root                StateKey
+	HasRoot             bool
+	TTSize              int
+	TTBuckets           int
+	TranslatedTTSize    int
+	TranslatedTTBuckets int
+	EvalCache           *EvalCache
+	EvalCacheSize       int
 }
 
 type StateKey struct {
@@ -68,15 +149,17 @@ type ImmediateWinStateKey struct {
 }
 
 type AIScoreSettings struct {
-	Depth         int
-	TimeoutMs     int
-	BoardSize     int
-	Player        PlayerColor
-	OnGhostUpdate func(GameState)
-	Cache         *AISearchCache
-	Config        Config
-	ShouldStop    func() bool
-	Stats         *SearchStats
+	Depth            int
+	TimeoutMs        int
+	BoardSize        int
+	Player           PlayerColor
+	OnGhostUpdate    func(GameState)
+	Cache            *AISearchCache
+	Config           Config
+	ShouldStop       func() bool
+	Stats            *SearchStats
+	DirectDepthOnly  bool
+	SkipQueueBacklog bool
 }
 
 type minimaxContext struct {
@@ -87,6 +170,7 @@ type minimaxContext struct {
 	history     []int
 	deadline    time.Time
 	hasDeadline bool
+	logIndent   int
 }
 
 type cacheKey struct {
@@ -96,28 +180,397 @@ type cacheKey struct {
 	Player    PlayerColor
 }
 
-var depthCache = map[cacheKey][]float64{}
-var defaultCache = newAISearchCache()
-
-type SearchStats struct {
-	Nodes           int64
-	TTProbes        int64
-	TTHits          int64
-	TTStores        int64
-	TTOverwrites    int64
-	Cutoffs         int64
-	CandidateCount  int64
-	RootCandidates  int64
-	DeepCandidates  int64
-	RootSamples     int64
-	DeepSamples     int64
-	EvalCacheProbes int64
-	EvalCacheHits   int64
-	Start           time.Time
-	DepthDurations  []time.Duration
-	CompletedDepths int
+type cacheSignature struct {
+	Hash      uint64
+	BoardSize int
+	Player    PlayerColor
 }
 
+var depthCache = map[cacheKey][]float64{}
+var depthCacheBest = map[cacheSignature]int{}
+var defaultCache = newAISearchCache()
+
+func highestCachedDepthScores(boardHash uint64, boardSize int, player PlayerColor, minDepth, maxDepth int) ([]float64, int) {
+	if minDepth < 1 {
+		minDepth = 1
+	}
+	sig := cacheSignature{Hash: boardHash, BoardSize: boardSize, Player: player}
+	best := depthCacheBest[sig]
+	if best == 0 || best < minDepth {
+		return nil, 0
+	}
+	key := cacheKey{Hash: boardHash, Depth: best, BoardSize: boardSize, Player: player}
+	if scores, ok := depthCache[key]; ok {
+		return scores, best
+	}
+	return nil, 0
+}
+
+func formatBoardArea(board Board, area boardArea) string {
+	if area.width() == 0 || area.height() == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for y := area.minY; y <= area.maxY; y++ {
+		for x := area.minX; x <= area.maxX; x++ {
+			switch board.At(x, y) {
+			case CellBlack:
+				sb.WriteByte('X')
+			case CellWhite:
+				sb.WriteByte('O')
+			default:
+				sb.WriteByte('.')
+			}
+		}
+		if y < area.maxY {
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
+func maxScore(scores []float64) float64 {
+	if len(scores) == 0 {
+		return math.Inf(-1)
+	}
+	best := math.Inf(-1)
+	for _, v := range scores {
+		if v > best {
+			best = v
+		}
+	}
+	return best
+}
+
+func playerColorName(p PlayerColor) string {
+	switch p {
+	case PlayerBlack:
+		return "Black"
+	case PlayerWhite:
+		return "White"
+	default:
+		return "None"
+	}
+}
+
+func boardAreaHash(board Board, area boardArea, toMove PlayerColor, nextCaptureWin bool, player PlayerColor, boardSize int) uint64 {
+	hash := uint64(1469598103934665603)
+	hash = mixKey(hash ^ uint64(area.width())<<8 ^ uint64(area.height()))
+	hash = mixKey(hash ^ uint64(boardSize))
+	hash = mixKey(hash ^ uint64(toMove))
+	hash = mixKey(hash ^ uint64(player)<<1)
+	if nextCaptureWin {
+		hash = mixKey(hash ^ 0xf00df00df00d)
+	}
+	for dy := 0; dy < area.height(); dy++ {
+		for dx := 0; dx < area.width(); dx++ {
+			cell := board.At(area.minX+dx, area.minY+dy)
+			hash ^= uint64(cell) + 1
+			hash *= 1099511628211
+		}
+		hash ^= 0xff
+		hash *= 1099511628211
+	}
+	return hash
+}
+
+func nextCaptureWouldWin(state GameState, rules Rules) bool {
+	threshold := rules.CaptureWinStones() - 2
+	if threshold < 0 {
+		threshold = 0
+	}
+	var captured int
+	if state.ToMove == PlayerBlack {
+		captured = state.CapturedBlack
+	} else {
+		captured = state.CapturedWhite
+	}
+	return captured >= threshold
+}
+
+type SearchStats struct {
+	Nodes              int64
+	TTProbes           int64
+	TTHits             int64
+	TranslatedTTProbes int64
+	TranslatedTTHits   int64
+	TTStores           int64
+	TTOverwrites       int64
+	Cutoffs            int64
+	CandidateCount     int64
+	RootCandidates     int64
+	DeepCandidates     int64
+	RootSamples        int64
+	DeepSamples        int64
+	EvalCacheProbes    int64
+	EvalCacheHits      int64
+	Start              time.Time
+	DepthDurations     []time.Duration
+	CompletedDepths    int
+}
+
+type boardScoreCache struct {
+	mu             sync.RWMutex
+	entries        map[uint64]float64
+	patternEntries map[patternKey]float64
+	warned         bool
+}
+
+func newBoardScoreCache() *boardScoreCache {
+	return &boardScoreCache{
+		entries:        make(map[uint64]float64),
+		patternEntries: make(map[patternKey]float64),
+	}
+}
+
+type patternKey struct {
+	signature     string
+	capturedBlack int
+	capturedWhite int
+	toMove        PlayerColor
+	nextCapture   bool
+}
+
+type boardPattern struct {
+	width  int
+	height int
+	cells  []Cell
+}
+
+func (p boardPattern) rotate90() boardPattern {
+	if len(p.cells) == 0 {
+		return p
+	}
+	newWidth := p.height
+	newHeight := p.width
+	cells := make([]Cell, newWidth*newHeight)
+	for y := 0; y < p.height; y++ {
+		for x := 0; x < p.width; x++ {
+			destX := p.height - 1 - y
+			destY := x
+			cells[destY*newWidth+destX] = p.cells[y*p.width+x]
+		}
+	}
+	return boardPattern{width: newWidth, height: newHeight, cells: cells}
+}
+
+func (p boardPattern) flipHorizontal() boardPattern {
+	if len(p.cells) == 0 {
+		return p
+	}
+	cells := make([]Cell, len(p.cells))
+	for y := 0; y < p.height; y++ {
+		for x := 0; x < p.width; x++ {
+			destX := p.width - 1 - x
+			cells[y*p.width+destX] = p.cells[y*p.width+x]
+		}
+	}
+	return boardPattern{width: p.width, height: p.height, cells: cells}
+}
+
+func (p boardPattern) rotate(rot int) boardPattern {
+	result := p
+	rot = ((rot % 4) + 4) % 4
+	for i := 0; i < rot; i++ {
+		result = result.rotate90()
+	}
+	return result
+}
+
+func (p boardPattern) signature() string {
+	if len(p.cells) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%dx%d;", p.width, p.height))
+	for _, cell := range p.cells {
+		switch cell {
+		case CellBlack:
+			sb.WriteByte('B')
+		case CellWhite:
+			sb.WriteByte('W')
+		default:
+			sb.WriteByte('.')
+		}
+	}
+	return sb.String()
+}
+
+func canonicalPatternSignature(pattern boardPattern) string {
+	best := ""
+	for rot := 0; rot < 4; rot++ {
+		transformed := pattern.rotate(rot)
+		for flip := 0; flip < 2; flip++ {
+			current := transformed
+			if flip == 1 {
+				current = current.flipHorizontal()
+			}
+			sig := current.signature()
+			if sig == "" {
+				continue
+			}
+			if best == "" || sig < best {
+				best = sig
+			}
+		}
+	}
+	return best
+}
+
+func buildPatternKey(state GameState, area boardArea, nextCapture bool) patternKey {
+	pattern := extractBoardPattern(state.Board, area)
+	sig := canonicalPatternSignature(pattern)
+	return patternKey{
+		signature:     sig,
+		capturedBlack: state.CapturedBlack,
+		capturedWhite: state.CapturedWhite,
+		toMove:        state.ToMove,
+		nextCapture:   nextCapture,
+	}
+}
+
+func extractBoardPattern(board Board, area boardArea) boardPattern {
+	width := area.width()
+	height := area.height()
+	if width <= 0 || height <= 0 {
+		return boardPattern{}
+	}
+	cells := make([]Cell, width*height)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			cells[y*width+x] = board.At(area.minX+x, area.minY+y)
+		}
+	}
+	return boardPattern{width: width, height: height, cells: cells}
+}
+
+func (c *boardScoreCache) get(hash uint64, pattern patternKey) (float64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if value, ok := c.entries[hash]; ok {
+		return value, true
+	}
+	if pattern.signature != "" {
+		if value, ok := c.patternEntries[pattern]; ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+func (c *boardScoreCache) set(state GameState, area boardArea, hash uint64, score float64, scorePlayer PlayerColor, nextCaptureWin bool, pattern patternKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[hash]; ok {
+		return
+	}
+	c.entries[hash] = score
+	if pattern.signature != "" {
+		if _, ok := c.patternEntries[pattern]; !ok {
+			c.patternEntries[pattern] = score
+		}
+	}
+	limit := GetConfig().AiBoardCacheLimit
+	if limit > 0 && len(c.entries) > limit && !c.warned {
+		fmt.Printf("[ai:cachewarn] board cache size %d exceeded limit %d\n", len(c.entries), limit)
+		c.warned = true
+	}
+	logBoardEvaluation(state, area, hash, score, scorePlayer, nextCaptureWin)
+}
+
+func logBoardEvaluation(state GameState, area boardArea, hash uint64, score float64, scorePlayer PlayerColor, nextCaptureWin bool) {
+	if !GetConfig().AiCacheLogToFile {
+		return
+	}
+	if !markBoardAsLogged(hash) {
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("hash=0x%x score=%.2f scoreFor=%s toMove=%s nextCaptureWin=%t area=%dx%d\n",
+		hash, score, playerColorName(scorePlayer), playerColorName(state.ToMove), nextCaptureWin, area.width(), area.height()))
+	sb.WriteString(formatBoardArea(state.Board, area))
+	sb.WriteString("\n---\n")
+	appendCacheLog(boardCacheLogPath, sb.String(), &boardLogMu)
+}
+
+func markBoardAsLogged(hash uint64) bool {
+	loggedBoardMu.Lock()
+	defer loggedBoardMu.Unlock()
+	if _, ok := loggedBoardHashes[hash]; ok {
+		return false
+	}
+	loggedBoardHashes[hash] = struct{}{}
+	return true
+}
+
+func loadLoggedBoardHashes() {
+	f, err := os.Open(boardCacheLogPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if h, ok := parseHashFromLog(line); ok {
+			loggedBoardMu.Lock()
+			loggedBoardHashes[h] = struct{}{}
+			loggedBoardMu.Unlock()
+		}
+	}
+}
+
+func parseHashFromLog(line string) (uint64, bool) {
+	const marker = "hash=0x"
+	idx := strings.Index(line, marker)
+	if idx == -1 {
+		return 0, false
+	}
+	start := idx + len(marker)
+	end := start
+	for end < len(line) && isHexDigit(line[end]) {
+		end++
+	}
+	if start == end {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(line[start:end], 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func isHexDigit(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
+}
+
+func appendCacheLog(path, data string, mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Printf("[ai:cachelog] failed to open %s: %v\n", path, err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(data); err != nil {
+		fmt.Printf("[ai:cachelog] failed to write %s: %v\n", path, err)
+	}
+}
+
+func logMinmaxCacheEntry(boardHash uint64, depth int, move Move, score float64, boardSize int) {
+	if !GetConfig().AiCacheLogToFile {
+		return
+	}
+	moveDesc := "nil"
+	if move.IsValid(boardSize) {
+		moveDesc = fmt.Sprintf("%d,%d", move.X, move.Y)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("boardHash=0x%x depth=%d move=[%s] score=%.2f\n", boardHash, depth, moveDesc, score))
+	appendCacheLog(minmaxCacheLogPath, sb.String(), &minmaxLogMu)
+}
 func newAISearchCache() AISearchCache {
 	return AISearchCache{
 		MoveCache:         make(map[MoveCacheKey]float64),
@@ -256,6 +709,11 @@ func ensureTT(cache *AISearchCache, config Config) {
 		cache.TTSize = config.AiTtSize
 		cache.TTBuckets = buckets
 	}
+	if cache.TranslatedTT == nil || cache.TranslatedTTSize != config.AiTtSize || cache.TranslatedTTBuckets != buckets {
+		cache.TranslatedTT = NewTranspositionTable(uint64(config.AiTtSize), buckets)
+		cache.TranslatedTTSize = config.AiTtSize
+		cache.TranslatedTTBuckets = buckets
+	}
 }
 
 func ensureEvalCache(cache *AISearchCache, config Config) {
@@ -294,18 +752,20 @@ type candidateMove struct {
 }
 
 const (
-	prioWin          = 0
-	prioBlockWin     = 1
-	prioCreateFour   = 2
-	prioBlockFour    = 3
-	prioCreateOpen3  = 4
-	prioBlockOpen3   = 5
-	prioLastMove     = 10
-	prioProximity    = 20
-	prioDefault      = 50
-	maxCandidatePrio = 100
-	proximityRadius  = 2
-	lastMoveRadius   = 3
+	prioWin               = 0
+	prioBlockWin          = 1
+	prioCreateFour        = 2
+	prioBlockFour         = 3
+	prioCreateOpen3       = 4
+	prioBlockOpen3        = 5
+	prioLastMove          = 10
+	prioProximity         = 20
+	prioDefault           = 50
+	maxCandidatePrio      = 100
+	proximityRadius       = 2
+	lastMoveRadius        = 3
+	translationMoveRadius = 4
+	translationEvalMargin = 2
 )
 
 type boardBBox struct {
@@ -366,6 +826,148 @@ func computeDensity(stones, width, height int) float64 {
 		return 0.0
 	}
 	return float64(stones) / float64(width*height)
+}
+
+type translationMargins struct {
+	left   int
+	right  int
+	top    int
+	bottom int
+}
+
+func translationMarginsFromBBox(bbox boardBBox, boardSize int) translationMargins {
+	if boardSize <= 0 {
+		boardSize = bbox.width
+		if boardSize <= 0 {
+			boardSize = 1
+		}
+	}
+	if bbox.stones == 0 {
+		return translationMargins{
+			left:   boardSize,
+			right:  boardSize,
+			top:    boardSize,
+			bottom: boardSize,
+		}
+	}
+	return translationMargins{
+		left:   bbox.minX,
+		right:  boardSize - 1 - bbox.maxX,
+		top:    bbox.minY,
+		bottom: boardSize - 1 - bbox.maxY,
+	}
+}
+
+func translationGuardForDepth(depth, boardSize int) translationGuard {
+	if depth < 0 {
+		depth = 0
+	}
+	expansion := translationMoveRadius*depth + translationEvalMargin
+	if boardSize > 0 && expansion > boardSize {
+		expansion = boardSize
+	}
+	return translationGuard{
+		Left:   expansion,
+		Right:  expansion,
+		Top:    expansion,
+		Bottom: expansion,
+	}
+}
+
+func translationMarginsSatisfy(m translationMargins, guard translationGuard) bool {
+	if m.left < guard.Left {
+		return false
+	}
+	if m.right < guard.Right {
+		return false
+	}
+	if m.top < guard.Top {
+		return false
+	}
+	return m.bottom >= guard.Bottom
+}
+
+func logAITask(ctx minimaxContext, indent int, format string, args ...interface{}) {
+	if !ctx.settings.Config.AiLogSearchStats {
+		return
+	}
+	prefix := strings.Repeat("  ", indent)
+	fmt.Printf("[ai:trace] %s%s\n", prefix, fmt.Sprintf(format, args...))
+}
+
+func logPrune(ctx minimaxContext, depth int, move Move, best, alpha, beta float64) {
+	if !ctx.settings.Config.AiLogSearchStats {
+		return
+	}
+	prefix := strings.Repeat("  ", ctx.logIndent+1)
+	fmt.Printf("[ai:prune] %sdepth=%d move=(%d,%d) best=%.2f alpha=%.2f beta=%.2f\n", prefix, depth, move.X, move.Y, best, alpha, beta)
+}
+
+func computeTranslationKey(state GameState, boardSize int) (uint64, boardBBox) {
+	if boardSize <= 0 {
+		boardSize = state.Board.Size()
+	}
+	if boardSize > state.Board.Size() {
+		boardSize = state.Board.Size()
+	}
+	bbox := computeBBox(state.Board, boardSize)
+	var hash uint64
+	z := GetZobrist(boardSize)
+	for y := bbox.minY; y <= bbox.maxY; y++ {
+		if y < 0 || y >= boardSize {
+			continue
+		}
+		for x := bbox.minX; x <= bbox.maxX; x++ {
+			if x < 0 || x >= boardSize {
+				continue
+			}
+			cell := state.Board.At(x, y)
+			if cell == CellEmpty {
+				continue
+			}
+			player := PlayerBlack
+			if cell == CellWhite {
+				player = PlayerWhite
+			}
+			relX := x
+			relY := y
+			if bbox.stones > 0 {
+				relX = x - bbox.minX
+				relY = y - bbox.minY
+			}
+			hash ^= z.stone(relX, relY, player)
+		}
+	}
+	if state.ToMove == PlayerWhite {
+		hash ^= z.side
+	}
+	hash ^= captureHash(PlayerBlack, state.CapturedBlack)
+	hash ^= captureHash(PlayerWhite, state.CapturedWhite)
+	key := mixKey(hash ^ mixKey(uint64(boardSize)<<32|uint64(state.Status)))
+	return key, bbox
+}
+
+func translationGuardSatisfied(entry TTEntry, margins translationMargins) bool {
+	if margins.left < entry.RequiredLeft {
+		return false
+	}
+	if margins.right < entry.RequiredRight {
+		return false
+	}
+	if margins.top < entry.RequiredTop {
+		return false
+	}
+	return margins.bottom >= entry.RequiredBottom
+}
+
+func storeTranslatedEntry(cache *AISearchCache, key uint64, depth int, value float64, flag TTFlag, best Move, guard translationGuard, margins translationMargins) {
+	if cache == nil || cache.TranslatedTT == nil {
+		return
+	}
+	if !translationMarginsSatisfy(margins, guard) {
+		return
+	}
+	cache.TranslatedTT.StoreWithGuard(key, depth, value, flag, best, guard)
 }
 
 func computeAvgDistToCenter(board Board, boardSize int) float64 {
@@ -923,27 +1525,36 @@ func evalKey(stateHash uint64, boardSize int, player PlayerColor) uint64 {
 	return stateHash ^ mixKey(uint64(boardSize)<<32|uint64(player))
 }
 
-func evalBoardCached(stateHash uint64, board Board, settings AIScoreSettings, cache *AISearchCache) float64 {
+func evalBoardCached(state GameState, rules Rules, settings AIScoreSettings, cache *AISearchCache) float64 {
+	board := state.Board
 	if !settings.Config.AiEnableEvalCache {
 		return EvaluateBoard(board, settings.Player, settings.Config)
 	}
-	if stateHash == 0 {
-		return EvaluateBoard(board, settings.Player, settings.Config)
+	area := computePlayableArea(board, settings.BoardSize, settings.Config.AiBoardCacheMargin)
+	nextCaptureWin := nextCaptureWouldWin(state, rules)
+	areaHash := boardAreaHash(board, area, state.ToMove, nextCaptureWin, settings.Player, settings.BoardSize)
+	pattern := buildPatternKey(state, area, nextCaptureWin)
+	if value, ok := boardCache.get(areaHash, pattern); ok {
+		return value
 	}
 	ensureEvalCache(cache, settings.Config)
+	stateHash := state.Hash
 	if cache.EvalCache != nil {
 		if settings.Stats != nil {
 			settings.Stats.EvalCacheProbes++
 		}
-		if value, ok := cache.EvalCache.Get(evalKey(stateHash, settings.BoardSize, settings.Player)); ok {
-			if settings.Stats != nil {
-				settings.Stats.EvalCacheHits++
+		if stateHash != 0 {
+			if value, ok := cache.EvalCache.Get(evalKey(stateHash, settings.BoardSize, settings.Player)); ok {
+				if settings.Stats != nil {
+					settings.Stats.EvalCacheHits++
+				}
+				return value
 			}
-			return value
 		}
 	}
 	value := EvaluateBoard(board, settings.Player, settings.Config)
-	if cache.EvalCache != nil {
+	boardCache.set(state, area, areaHash, value, settings.Player, nextCaptureWin, pattern)
+	if cache.EvalCache != nil && stateHash != 0 {
 		cache.EvalCache.Put(evalKey(stateHash, settings.BoardSize, settings.Player), value)
 	}
 	return value
@@ -958,7 +1569,7 @@ func heuristicForMove(state GameState, rules Rules, settings AIScoreSettings, mo
 		return illegalScore
 	}
 	cache := selectCache(minimaxContext{settings: settings})
-	return evalBoardCached(next.Hash, next.Board, settings, cache)
+	return evalBoardCached(next, rules, settings, cache)
 }
 
 func evaluateStateHeuristic(state GameState, rules Rules, settings AIScoreSettings) float64 {
@@ -977,7 +1588,7 @@ func evaluateStateHeuristic(state GameState, rules Rules, settings AIScoreSettin
 		return -winScore
 	}
 	cache := selectCache(minimaxContext{settings: settings})
-	return evalBoardCached(state.Hash, state.Board, settings, cache)
+	return evalBoardCached(state, rules, settings, cache)
 }
 
 func tacticalExtensionScore(state GameState, ctx minimaxContext, currentPlayer PlayerColor, depthFromRoot int) float64 {
@@ -1333,6 +1944,7 @@ func formatMoves(moves []Move) string {
 }
 
 func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer PlayerColor, depthFromRoot int, alpha, beta float64) float64 {
+	logAITask(ctx, ctx.logIndent, "minimax enter depth=%d depthFromRoot=%d", depth, depthFromRoot)
 	if timedOut(ctx) || state.Status != StatusRunning {
 		return evaluateStateHeuristic(state, ctx.rules, ctx.settings)
 	}
@@ -1350,15 +1962,21 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 	}
 	cache := selectCache(ctx)
 	ensureTT(cache, ctx.settings.Config)
-	boardHash := ttKeyFor(state, ctx.settings.BoardSize)
+	boardSize := ctx.settings.BoardSize
+	boardHash := ttKeyFor(state, boardSize)
+	transKey, transBBox := computeTranslationKey(state, boardSize)
+	transMargins := translationMarginsFromBBox(transBBox, boardSize)
 	alphaOrig := alpha
 	betaOrig := beta
 	var pvMove *Move
 	if ctx.settings.Stats != nil {
 		ctx.settings.Stats.TTProbes++
 	}
+	ttStart := time.Now()
 	if cache.TT != nil {
 		if entry, ok := cache.TT.Probe(boardHash); ok {
+			ttDuration := time.Since(ttStart).Milliseconds()
+			logAITask(ctx, ctx.logIndent+1, "TT exact probe depth=%d took=%dms hit=true", depth, ttDuration)
 			if ctx.settings.Stats != nil {
 				ctx.settings.Stats.TTHits++
 			}
@@ -1367,33 +1985,59 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 				pvMove = &pv
 			}
 			if entry.Depth >= depth {
-				switch entry.Flag {
-				case TTExact:
-					return entry.Value
-				case TTLower:
-					if entry.Value > alpha {
-						alpha = entry.Value
-					}
-				case TTUpper:
-					if entry.Value < beta {
-						beta = entry.Value
-					}
-				}
-				if alpha >= beta {
-					if ctx.settings.Stats != nil {
-						ctx.settings.Stats.Cutoffs++
-					}
-					return entry.Value
+				logAITask(ctx, ctx.logIndent+1, "TT exact entry depth=%d flag=%d value=%.2f", entry.Depth, entry.Flag, entry.Value)
+				if _, ret, value := applyTTEntry(entry, depth, &alpha, &beta, ctx.settings.Stats); ret {
+					logAITask(ctx, ctx.logIndent+1, "TT exact returning value=%.2f", value)
+					return value
 				}
 			}
+		} else {
+			ttDuration := time.Since(ttStart).Milliseconds()
+			logAITask(ctx, ctx.logIndent+1, "TT exact probe depth=%d took=%dms hit=false", depth, ttDuration)
+		}
+	} else {
+		ttDuration := time.Since(ttStart).Milliseconds()
+		logAITask(ctx, ctx.logIndent+1, "TT exact probe depth=%d took=%dms table=nil", depth, ttDuration)
+	}
+
+	if cache.TranslatedTT != nil {
+		if ctx.settings.Stats != nil {
+			ctx.settings.Stats.TranslatedTTProbes++
+		}
+		transStart := time.Now()
+		if entry, ok := cache.TranslatedTT.Probe(transKey); ok {
+			guardOk := translationGuardSatisfied(entry, transMargins)
+			logAITask(ctx, ctx.logIndent+1, "Translated TT probe depth=%d took=%dms guardOk=%v required=(%d,%d,%d,%d)", depth, time.Since(transStart).Milliseconds(), guardOk, entry.RequiredLeft, entry.RequiredRight, entry.RequiredTop, entry.RequiredBottom)
+			if guardOk {
+				if ctx.settings.Stats != nil {
+					ctx.settings.Stats.TranslatedTTHits++
+				}
+				if entry.BestMove.IsValid(boardSize) {
+					pv := entry.BestMove
+					if pvMove == nil {
+						pvMove = &pv
+					}
+				}
+				if _, ret, value := applyTTEntry(entry, depth, &alpha, &beta, ctx.settings.Stats); ret {
+					logAITask(ctx, ctx.logIndent+1, "Translated TT returning value=%.2f", value)
+					return value
+				}
+			} else {
+				logAITask(ctx, ctx.logIndent+1, "Translated TT guard failed margins=(%d,%d,%d,%d)", transMargins.left, transMargins.right, transMargins.top, transMargins.bottom)
+			}
+		} else {
+			logAITask(ctx, ctx.logIndent+1, "Translated TT probe depth=%d took=%dms hit=false", depth, time.Since(transStart).Milliseconds())
 		}
 	}
+	logAITask(ctx, ctx.logIndent, "No TT hit; continuing search")
 
 	maximizing := currentPlayer == ctx.settings.Player
 	best := math.Inf(-1)
 	if !maximizing {
 		best = math.Inf(1)
 	}
+	secondBest := math.Inf(-1)
+	secondBestMove := Move{}
 	cache = selectCache(ctx)
 	immediateWins := findImmediateWinMovesCached(cache, state, ctx.rules, currentPlayer, ctx.settings.BoardSize, ctx.settings.Config)
 	mustBlock := false
@@ -1460,14 +2104,23 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 						ctx.settings.Stats.TTOverwrites++
 					}
 				}
+				if replaced || overwrote {
+					logMinmaxCacheEntry(boardHash, depth, move, win, boardSize)
+				}
 			}
+			storeTranslatedEntry(cache, transKey, depth, win, TTExact, move, translationGuardForDepth(depth, boardSize), transMargins)
 			return win
 		}
 		value := evaluateMoveWithCache(state, ctx, currentPlayer, move, depth, depthFromRoot, boardHash, nil, alpha, beta)
 		if maximizing {
 			if value > best {
+				secondBest = best
+				secondBestMove = bestMove
 				best = value
 				bestMove = move
+			} else if value > secondBest {
+				secondBest = value
+				secondBestMove = move
 			}
 			if best > alpha {
 				alpha = best
@@ -1485,6 +2138,7 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 			if ctx.settings.Stats != nil {
 				ctx.settings.Stats.Cutoffs++
 			}
+			logPrune(ctx, depth, move, best, alpha, beta)
 			if ctx.settings.Config.AiEnableKillerMoves {
 				recordKiller(ctx, depthFromRoot, move)
 			}
@@ -1501,6 +2155,12 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 	if math.IsInf(best, 1) || math.IsInf(best, -1) {
 		return 0.0
 	}
+	if depthFromRoot == 0 && maximizing {
+		if best <= -winScore/2 && secondBest > math.Inf(-1) {
+			best = secondBest
+			bestMove = secondBestMove
+		}
+	}
 	flag := TTExact
 	if best <= alphaOrig {
 		flag = TTUpper
@@ -1515,8 +2175,37 @@ func minimax(state GameState, ctx minimaxContext, depth int, currentPlayer Playe
 				ctx.settings.Stats.TTOverwrites++
 			}
 		}
+		if replaced || overwrote {
+			logMinmaxCacheEntry(boardHash, depth, bestMove, best, boardSize)
+		}
 	}
+	storeTranslatedEntry(cache, transKey, depth, best, flag, bestMove, translationGuardForDepth(depth, boardSize), transMargins)
 	return best
+}
+
+func applyTTEntry(entry TTEntry, depth int, alpha *float64, beta *float64, stats *SearchStats) (used bool, ret bool, value float64) {
+	if entry.Depth < depth {
+		return false, false, 0.0
+	}
+	switch entry.Flag {
+	case TTExact:
+		return true, true, entry.Value
+	case TTLower:
+		if entry.Value > *alpha {
+			*alpha = entry.Value
+		}
+	case TTUpper:
+		if entry.Value < *beta {
+			*beta = entry.Value
+		}
+	}
+	if *alpha >= *beta {
+		if stats != nil {
+			stats.Cutoffs++
+		}
+		return true, true, entry.Value
+	}
+	return true, false, entry.Value
 }
 
 func evaluateMoveWithCache(state GameState, ctx minimaxContext, currentPlayer PlayerColor, move Move, depthLeft int, depthFromRoot int, boardHash uint64, outCached *bool, alpha, beta float64) float64 {
@@ -1545,7 +2234,9 @@ func evaluateMoveWithCache(state GameState, ctx minimaxContext, currentPlayer Pl
 			if depthLeft <= 1 || timedOut(ctx) {
 				score = evaluateStateHeuristic(next, ctx.rules, ctx.settings)
 			} else {
-				score = minimax(next, ctx, depthLeft-1, otherPlayer(currentPlayer), depthFromRoot+1, alpha, beta)
+				nextCtx := ctx
+				nextCtx.logIndent = ctx.logIndent + 1
+				score = minimax(next, nextCtx, depthLeft-1, otherPlayer(currentPlayer), depthFromRoot+1, alpha, beta)
 			}
 		}
 	}
@@ -1673,7 +2364,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		settings.Config = GetConfig()
 	}
 	if state.Hash == 0 {
-		state.Hash = ComputeHash(state)
+		state.recomputeHashes()
 	}
 	if settings.Config.AiMaxDepth > 0 {
 		settings.Depth = settings.Config.AiMaxDepth
@@ -1690,7 +2381,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 	if settings.Config.AiEnableHistoryMoves {
 		history = make([]int, settings.BoardSize*settings.BoardSize)
 	}
-	ctx := minimaxContext{rules: rules, settings: settings, start: time.Now(), killers: killers, history: history}
+	ctx := minimaxContext{rules: rules, settings: settings, start: time.Now(), killers: killers, history: history, logIndent: 0}
 	if settings.Config.AiTimeBudgetMs > 0 {
 		ctx.deadline = ctx.start.Add(time.Duration(settings.Config.AiTimeBudgetMs) * time.Millisecond)
 		ctx.hasDeadline = true
@@ -1698,6 +2389,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 	if settings.Stats != nil && settings.Stats.Start.IsZero() {
 		settings.Stats.Start = ctx.start
 	}
+	logAITask(ctx, 0, "ScoreBoard start depth=%d board=%d budget=%dms", settings.Depth, settings.BoardSize, settings.Config.AiTimeBudgetMs)
 	if !hasStoneWithin(state.Board, settings.BoardSize) {
 		scores := make([]float64, settings.BoardSize*settings.BoardSize)
 		for i := range scores {
@@ -1717,22 +2409,59 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		scores[center*settings.BoardSize+center] = 0.0
 		return scores
 	}
+	logAITask(ctx, 1, "Candidate generation complete count=%d", len(initialCandidates))
+	startTime := ctx.start
+	lastDepthCompleted := 0
 	cache := selectCache(ctx)
 	ensureTT(cache, settings.Config)
 	boardHash := ttKeyFor(state, settings.BoardSize)
+	var cachedScores []float64
 	var scores []float64
 	var lastScores []float64
 	var lastBestScore float64
+	var fallbackScores []float64
+	fallbackBestScore := math.Inf(-1)
 	haveBest := false
-	for depth := 1; depth <= settings.Depth; depth++ {
+	startDepth := minDepth
+	cachedDepth := 0
+	if settings.DirectDepthOnly {
+		startDepth = settings.Depth
+		if startDepth < minDepth {
+			startDepth = minDepth
+		}
+	} else if scoresFromCache, depth := highestCachedDepthScores(boardHash, settings.BoardSize, settings.Player, minDepth, settings.Depth); depth > 0 {
+		logAITask(ctx, 1, "Depth cache hit depth=%d, continuing search at %d", depth, minInt(depth+1, settings.Depth))
+		cachedDepth = depth
+		cachedScores = scoresFromCache
+		fallbackScores = append([]float64(nil), scoresFromCache...)
+		fallbackBestScore = maxScore(scoresFromCache)
+		lastBestScore = fallbackBestScore
+		haveBest = true
+		startDepth = depth + 1
+	}
+	if startDepth < minDepth {
+		startDepth = minDepth
+	}
+	if startDepth > settings.Depth {
+		if settings.Stats != nil && cachedDepth > 0 {
+			settings.Stats.CompletedDepths = cachedDepth
+		}
+		if len(fallbackScores) > 0 {
+			return fallbackScores
+		}
+		return cachedScores
+	}
+	for depth := startDepth; depth <= settings.Depth; depth++ {
 		if timedOut(ctx) && depth > minDepth {
 			break
 		}
+		logAITask(ctx, 1, "Depth %d start", depth)
 		depthStart := time.Now()
 		if settings.Config.AiQuickWinExit {
 			for _, cand := range initialCandidates {
 				move := cand.move
 				if isImmediateWinCached(cache, state, rules, move, settings.Player, settings.BoardSize) {
+					logAITask(ctx, 2, "Immediate win cached move=%v depth=%d", move, depth)
 					winScores := make([]float64, settings.BoardSize*settings.BoardSize)
 					for i := range winScores {
 						winScores[i] = illegalScore
@@ -1745,6 +2474,9 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		key := cacheKey{Hash: boardHash, Depth: depth, BoardSize: settings.BoardSize, Player: settings.Player}
 		cachedScores, ok := depthCache[key]
 		cached := ok
+		if cached && settings.Config.AiLogSearchStats {
+			fmt.Printf("[ai:cache] board=0x%x depth=%d reused cached scores\n", boardHash, depth)
+		}
 		if !cached {
 			usedCache := false
 			alpha := math.Inf(-1)
@@ -1771,10 +2503,23 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 				break
 			}
 			depthCache[key] = scores
+			sig := cacheSignature{Hash: boardHash, BoardSize: settings.BoardSize, Player: settings.Player}
+			if depth > depthCacheBest[sig] {
+				depthCacheBest[sig] = depth
+			}
 			cached = usedCache
 		} else {
 			scores = cachedScores
 		}
+		if len(scores) > 0 {
+			depthBest := maxScore(scores)
+			if depthBest > fallbackBestScore {
+				fallbackBestScore = depthBest
+				fallbackScores = append([]float64(nil), scores...)
+			}
+		}
+		duration := time.Since(depthStart)
+		logAITask(ctx, 1, "Depth %d completed in %dms cached=%v", depth, duration.Milliseconds(), cached)
 		if settings.Stats != nil {
 			settings.Stats.DepthDurations = append(settings.Stats.DepthDurations, time.Since(depthStart))
 			settings.Stats.CompletedDepths = depth
@@ -1801,12 +2546,26 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		_ = bestX
 		_ = bestY
 		_ = cached
+		lastDepthCompleted = depth
 		lastScores = scores
 		lastBestScore = bestScore
 		haveBest = true
 	}
+	totalDuration := time.Since(startTime)
+	logAITask(ctx, 0, "ScoreBoard finished depth=%d total=%dms", lastDepthCompleted, totalDuration.Milliseconds())
+	if !settings.DirectDepthOnly && lastDepthCompleted < settings.Depth {
+		if timedOut(ctx) || (ctx.settings.ShouldStop != nil && ctx.settings.ShouldStop()) {
+			enqueueSearchBacklogTask(state, rules)
+		}
+	}
 	if lastScores != nil {
+		if lastBestScore <= fallbackBestScore && len(fallbackScores) > 0 {
+			return fallbackScores
+		}
 		return lastScores
+	}
+	if len(fallbackScores) > 0 && lastBestScore <= fallbackBestScore {
+		return fallbackScores
 	}
 	return scores
 }
@@ -1882,7 +2641,7 @@ func RerootCache(cache *AISearchCache, state GameState) {
 }
 
 func ttKeyFor(state GameState, boardSize int) uint64 {
-	key := state.Hash
+	key := state.CanonHash
 	key ^= mixKey(uint64(boardSize)<<32 | uint64(state.Status))
 	return key
 }

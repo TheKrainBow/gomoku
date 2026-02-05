@@ -8,6 +8,7 @@ type Config struct {
 	AiDepth              int             `json:"ai_depth"`
 	AiTimeoutMs          int             `json:"ai_timeout_ms"`
 	AiTimeBudgetMs       int             `json:"ai_time_budget_ms"`
+	AiBacklogEstimateMs  int             `json:"ai_backlog_estimate_ms"`
 	AiMaxDepth           int             `json:"ai_max_depth"`
 	AiMinDepth           int             `json:"ai_min_depth"`
 	AiReturnLastComplete bool            `json:"ai_return_last_complete_depth_only"`
@@ -34,6 +35,11 @@ type Config struct {
 	AiTtBuckets          int             `json:"ai_tt_buckets"`
 	AiTtUseSetAssoc      bool            `json:"ai_tt_use_set_assoc"`
 	AiLogSearchStats     bool            `json:"ai_log_search_stats"`
+	AiCacheLogToFile     bool            `json:"ai_cache_log_to_file"`
+	AiPersistCaches      bool            `json:"ai_persist_caches"`
+	AiBoardCacheLimit    int             `json:"ai_board_cache_limit"`
+	AiMinmaxCacheLimit   int             `json:"ai_minmax_cache_limit"`
+	AiBoardCacheMargin   int             `json:"ai_board_cache_margin"`
 	AiEnableKillerMoves  bool            `json:"ai_enable_killer_moves"`
 	AiEnableHistoryMoves bool            `json:"ai_enable_history_moves"`
 	AiKillerBoost        int             `json:"ai_killer_boost"`
@@ -64,80 +70,88 @@ type ConfigStore struct {
 	mu     sync.RWMutex
 	config Config
 }
+
 func DefaultConfig() Config {
 	return Config{
-		GhostMode:            false,
-		LogDepthScores:       false,
+		GhostMode:      false,
+		LogDepthScores: false,
 
 		// Time budget mode
 		AiTimeBudgetMs:       500,
+		AiBacklogEstimateMs:  120000,
 		AiTimeoutMs:          0,
+		AiDepth:              10,
 		AiMinDepth:           1,
-		AiMaxDepth:           12,   // allow deeper only if tree collapses
+		AiMaxDepth:           10, // allow deeper only if tree collapses
 		AiReturnLastComplete: true,
 
 		// IMPORTANT: branching control (primary speed lever)
-		AiEnableDynamicTopK:  true,
-		AiEnableTacticalK:    true,
+		AiEnableDynamicTopK: true,
+		AiEnableTacticalK:   true,
 
 		// Hard caps (safety net)
-		AiMaxCandidatesRoot:  24,   // was 40
-		AiMaxCandidatesMid:   14,   // was 25
-		AiMaxCandidatesDeep:  8,    // was 14
+		AiMaxCandidatesRoot: 24, // was 40
+		AiMaxCandidatesMid:  14, // was 25
+		AiMaxCandidatesDeep: 8,  // was 14
 
 		// Quiet positions (most common)
-		AiKQuietRoot:         18,   // was 24
-		AiKQuietMid:          10,   // was 14
-		AiKQuietDeep:         6,    // was 8
+		AiKQuietRoot: 18, // was 24
+		AiKQuietMid:  10, // was 14
+		AiKQuietDeep: 6,  // was 8
 
 		// Tactical positions (forced lines) — keep slightly larger
-		AiKTactRoot:          24,   // was 30
-		AiKTactMid:           12,   // was 18
-		AiKTactDeep:          8,    // was 10
+		AiKTactRoot: 24, // was 30
+		AiKTactMid:  12, // was 18
+		AiKTactDeep: 8,  // was 10
 
 		// If you still have legacy “AiTopCandidates”, keep it aligned or unused
-		AiTopCandidates:      0,    // disable legacy top-candidates if still read anywhere
+		AiTopCandidates: 0, // disable legacy top-candidates if still read anywhere
 
 		// Tactical mode: ON (but should restrict to forcing moves)
 		AiEnableTacticalMode: true,
 
 		// Tactical extension: OFF by default for 500ms stability
 		// Turn it ON only if your tacticalCandidates set is very small (<= 6)
-		AiEnableTacticalExt:  false,
-		AiTacticalExtDepth:   0,
+		AiEnableTacticalExt: false,
+		AiTacticalExtDepth:  0,
 
 		// Must-block / win-in-1 correctness + speed
-		AiUseScanWinIn1:      true,
-		AiQuickWinExit:       true,
+		AiUseScanWinIn1: true,
+		AiQuickWinExit:  true,
 
 		// Aspiration windows: OFF until everything is stable (it can cause re-searches)
-		AiEnableAspiration:   false,
-		AiAspWindow:          2000.0,
-		AiAspWindowMax:       2000000000.0,
+		AiEnableAspiration: false,
+		AiAspWindow:        2000.0,
+		AiAspWindowMax:     2000000000.0,
 
 		// Caches
-		AiEnableEvalCache:    true,
-		AiEvalCacheSize:      1 << 19, // 524288 entries (bigger than 1<<18)
+		AiEnableEvalCache: true,
+		AiEvalCacheSize:   1 << 19, // 524288 entries (bigger than 1<<18)
 
 		// TT: increase size for better hit rate under iterative deepening
-		AiTtUseSetAssoc:      true,
-		AiTtBuckets:          4,       // was 2
-		AiTtSize:             1 << 18,  // 262144 (was 1<<17)
-		AiTtMaxEntries:       0,        // avoid conflicting limiter if both are used
+		AiTtUseSetAssoc: true,
+		AiTtBuckets:     4,       // was 2
+		AiTtSize:        1 << 18, // 262144 (was 1<<17)
+		AiTtMaxEntries:  0,       // avoid conflicting limiter if both are used
 
 		// Move ordering helpers
 		AiEnableKillerMoves:  true,
 		AiEnableHistoryMoves: true,
 
 		// Killer/history boosts should be modest; huge boosts can wreck ordering
-		AiKillerBoost:        8000,     // was 50000
-		AiHistoryBoost:       16,       // was 4
+		AiKillerBoost:  8000, // was 50000
+		AiHistoryBoost: 16,   // was 4
 
 		// Background pondering can steal CPU and hurt 500ms latency
-		AiPonderingEnabled:   false,
+		AiPonderingEnabled: false,
 
-		AiGhostThrottleMs:    50,
-		AiLogSearchStats:     true,     // turn ON temporarily to tune; disable later
+		AiGhostThrottleMs:  50,
+		AiLogSearchStats:   false, // turn ON temporarily to tune; disable later
+		AiCacheLogToFile:   false,
+		AiPersistCaches:    true,
+		AiBoardCacheLimit:  10000,
+		AiMinmaxCacheLimit: 1000,
+		AiBoardCacheMargin: 0,
 
 		Heuristics: HeuristicConfig{
 			Open4:        100000.0,
