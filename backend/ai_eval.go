@@ -133,7 +133,8 @@ func EvaluateBoard(board Board, sideToMove PlayerColor, config Config) float64 {
 	lines := getLinesForSize(board.Size())
 	me := sideToMove
 	opp := otherPlayer(sideToMove)
-	tokensBuf := make([]byte, board.Size()+2)
+	var tokensBufStack [64]byte
+	tokensBuf := tokensBufStack[:board.Size()+2]
 
 	var totalsMe ThreatTotals
 	var totalsOpp ThreatTotals

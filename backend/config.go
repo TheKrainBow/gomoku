@@ -18,6 +18,7 @@ type Config struct {
 	AiMaxCandidatesMid    int             `json:"ai_max_candidates_mid"`
 	AiMaxCandidatesDeep   int             `json:"ai_max_candidates_deep"`
 	AiMaxCandidatesPly7   int             `json:"ai_max_candidates_ply7"`
+	AiMaxCandidatesPly8   int             `json:"ai_max_candidates_ply8"`
 	AiMaxCandidatesPly9   int             `json:"ai_max_candidates_ply9"`
 	AiEnableTacticalK     bool            `json:"ai_enable_tactical_k"`
 	AiKQuietRoot          int             `json:"ai_k_quiet_root"`
@@ -88,7 +89,7 @@ func DefaultConfig() Config {
 		AiBacklogEstimateMs:  120000,
 		AiTimeoutMs:          0,
 		AiDepth:              10,
-		AiMinDepth:           1,
+		AiMinDepth:           5,
 		AiMaxDepth:           10, // allow deeper only if tree collapses
 		AiReturnLastComplete: true,
 
@@ -101,6 +102,7 @@ func DefaultConfig() Config {
 		AiMaxCandidatesMid:  14, // was 25
 		AiMaxCandidatesDeep: 8,  // was 14
 		AiMaxCandidatesPly7: 14,
+		AiMaxCandidatesPly8: 9,
 		AiMaxCandidatesPly9: 9,
 
 		// Quiet positions (most common)

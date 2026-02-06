@@ -1,14 +1,14 @@
-gomoku-backend  | [ai:queue] depth [6/10] complete in 23ms nodes=349 nps=15173 tt_probe=349 tt_hit=56 tt_hit_flag=(e:4 l:51 u:1) cutoffs=333 tt_cutoff=40 ab_cutoff=293
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [7/10] (5000ms, 15228 nodes, 3045 nps, b=29.98, tt=12.1%, cutoff=AB)
-gomoku-backend  | [ai:queue] depth [7/10] complete in 5278ms nodes=15577 nps=2951 tt_probe=15577 tt_hit=1818 tt_hit_flag=(e:14 l:473 u:1331) cutoffs=13516 tt_cutoff=1630 ab_cutoff=11886
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (10000ms, 30536 nodes, 3062 nps, b=37.51, tt=10.1%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (15000ms, 39944 nodes, 1881 nps, b=44.82, tt=8.8%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (20001ms, 59400 nodes, 3891 nps, b=35.16, tt=15.8%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (25000ms, 86152 nodes, 5351 nps, b=39.15, tt=25.6%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (30000ms, 91848 nodes, 1139 nps, b=29.98, tt=10.1%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (35000ms, 97352 nodes, 1101 nps, b=28.22, tt=11.9%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (40000ms, 103240 nodes, 1177 nps, b=34.96, tt=8.9%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (45000ms, 112584 nodes, 1869 nps, b=39.02, tt=8.7%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (50000ms, 120136 nodes, 1510 nps, b=31.77, tt=12.8%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (55000ms, 132744 nodes, 2522 nps, b=33.64, tt=17.5%, cutoff=AB)
-gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [8/10] (60000ms, 149256 nodes, 3302 nps, b=33.71, tt=23.5%, cutoff=AB)
+[ai:queue] depth [6/10] complete in 23ms nodes=349 nps=15173 tt_probe=349 tt_hit=56 tt_hit_flag=(e:4 l:51 u:1) cutoffs=333 tt_cutoff=40 ab_cutoff=293
+[ai:queue] hash 0xab5896a447e7d523 [7/10] (5000ms, 15228 nodes, 3045 nps, b=29.98, tt=12.1%, cutoff=AB)
+[ai:queue] depth [7/10] complete in 5278ms nodes=15577 nps=2951 tt_probe=15577 tt_hit=1818 tt_hit_flag=(e:14 l:473 u:1331) cutoffs=13516 tt_cutoff=1630 ab_cutoff=11886
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (10000ms, 30536 nodes, 3062 nps, b=37.51, tt=10.1%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (15000ms, 39944 nodes, 1881 nps, b=44.82, tt=8.8%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (20001ms, 59400 nodes, 3891 nps, b=35.16, tt=15.8%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (25000ms, 86152 nodes, 5351 nps, b=39.15, tt=25.6%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (30000ms, 91848 nodes, 1139 nps, b=29.98, tt=10.1%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (35000ms, 97352 nodes, 1101 nps, b=28.22, tt=11.9%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (40000ms, 103240 nodes, 1177 nps, b=34.96, tt=8.9%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (45000ms, 112584 nodes, 1869 nps, b=39.02, tt=8.7%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (50000ms, 120136 nodes, 1510 nps, b=31.77, tt=12.8%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (55000ms, 132744 nodes, 2522 nps, b=33.64, tt=17.5%, cutoff=AB)
+[ai:queue] hash 0xab5896a447e7d523 [8/10] (60000ms, 149256 nodes, 3302 nps, b=33.71, tt=23.5%, cutoff=AB)

@@ -36,8 +36,9 @@ func (r Rules) IsLegal(state GameState, move Move, player PlayerColor) (bool, st
 		forbid = r.settings.ForbidDoubleThreeWhite
 	}
 	if forbid {
-		temp := state.Board.Clone()
-		if r.IsForbiddenDoubleThree(temp, move, player) {
+		// IsForbiddenDoubleThree mutates board only transiently (set/remove move),
+		// so we can run it directly without cloning the whole board.
+		if r.IsForbiddenDoubleThree(state.Board, move, player) {
 			return false, "forbidden double three"
 		}
 	}
@@ -94,7 +95,14 @@ func (r Rules) IsForbiddenDoubleThree(board Board, move Move, player PlayerColor
 }
 
 func (r Rules) FindCaptures(board Board, move Move, playerCell Cell) []Move {
-	captures := []Move{}
+	return r.FindCapturesInto(board, move, playerCell, nil)
+}
+
+func (r Rules) FindCapturesInto(board Board, move Move, playerCell Cell, captures []Move) []Move {
+	captures = captures[:0]
+	if cap(captures) < 8 {
+		captures = make([]Move, 0, 8)
+	}
 	opponentCell := CellBlack
 	if playerCell == CellBlack {
 		opponentCell = CellWhite

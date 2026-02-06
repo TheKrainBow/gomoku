@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"sync/atomic"
 	"testing"
 )
@@ -256,6 +257,7 @@ func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
 	cfg.AiEnableDynamicTopK = false
 	cfg.AiTopCandidates = 30
 	cfg.AiMaxCandidatesPly7 = 14
+	cfg.AiMaxCandidatesPly8 = 11
 	cfg.AiMaxCandidatesPly9 = 9
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
@@ -264,6 +266,9 @@ func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
 	}
 	if got := candidateLimit(ctx, 10, 7, false); got != 14 {
 		t.Fatalf("expected ply-7 cap to apply, got %d", got)
+	}
+	if got := candidateLimit(ctx, 10, 8, false); got != 11 {
+		t.Fatalf("expected ply-8 cap to apply, got %d", got)
 	}
 	if got := candidateLimit(ctx, 10, 9, false); got != 9 {
 		t.Fatalf("expected ply-9 cap to apply, got %d", got)
@@ -275,6 +280,7 @@ func TestCandidateLimitKeepsSmallerBaseLimit(t *testing.T) {
 	cfg.AiEnableDynamicTopK = false
 	cfg.AiTopCandidates = 6
 	cfg.AiMaxCandidatesPly7 = 14
+	cfg.AiMaxCandidatesPly8 = 11
 	cfg.AiMaxCandidatesPly9 = 9
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
@@ -295,5 +301,45 @@ func TestShouldApplyLMR(t *testing.T) {
 	}
 	if !shouldApplyLMR(4, 5, true) {
 		t.Fatalf("expected LMR on quiet late moves")
+	}
+}
+
+func TestApplyMoveWithUndoRestoresState(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 7
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerBlack
+	state.Board.Set(3, 3, CellBlack)
+	state.Board.Set(2, 3, CellWhite)
+	state.recomputeHashes()
+	original := state.Clone()
+
+	move := Move{X: 4, Y: 3}
+	var undo searchMoveUndo
+	if !applyMoveWithUndo(&state, rules, move, PlayerBlack, &undo) {
+		t.Fatalf("expected move to apply")
+	}
+	undoMoveWithUndo(&state, undo)
+
+	if state.Status != original.Status || state.ToMove != original.ToMove || state.HasLastMove != original.HasLastMove {
+		t.Fatalf("expected state header restored")
+	}
+	if state.CapturedBlack != original.CapturedBlack || state.CapturedWhite != original.CapturedWhite {
+		t.Fatalf("expected captures restored")
+	}
+	if state.Hash != original.Hash || state.CanonHash != original.CanonHash || state.HashSym != original.HashSym {
+		t.Fatalf("expected hashes restored")
+	}
+	for y := 0; y < settings.BoardSize; y++ {
+		for x := 0; x < settings.BoardSize; x++ {
+			if state.Board.At(x, y) != original.Board.At(x, y) {
+				t.Fatalf("board mismatch at (%d,%d)", x, y)
+			}
+		}
+	}
+	if !reflect.DeepEqual(state.ForcedCaptureMoves, original.ForcedCaptureMoves) {
+		t.Fatalf("forced capture moves mismatch")
 	}
 }
