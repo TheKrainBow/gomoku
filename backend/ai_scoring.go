@@ -2201,6 +2201,34 @@ func mergeSearchStats(dst, src *SearchStats) {
 	dst.BoardGenTime += src.BoardGenTime
 }
 
+func scoreBoardFromRootTT(state GameState, rules Rules, settings AIScoreSettings, tt *TranspositionTable, rootHash uint64) ([]float64, bool) {
+	if tt == nil {
+		return nil, false
+	}
+	entry, ok := tt.Probe(rootHash)
+	if !ok || entry.Flag != TTExact || entry.Depth < settings.Depth {
+		return nil, false
+	}
+	if !entry.BestMove.IsValid(settings.BoardSize) {
+		return nil, false
+	}
+	if legal, _ := rules.IsLegal(state, entry.BestMove, settings.Player); !legal {
+		return nil, false
+	}
+	scores := make([]float64, settings.BoardSize*settings.BoardSize)
+	for i := range scores {
+		scores[i] = illegalScore
+	}
+	scores[entry.BestMove.Y*settings.BoardSize+entry.BestMove.X] = entry.ScoreFloat()
+	if settings.Stats != nil {
+		settings.Stats.TTProbes++
+		settings.Stats.TTHits++
+		settings.Stats.TTExactHits++
+		settings.Stats.CompletedDepths = entry.Depth
+	}
+	return scores, true
+}
+
 const progressChunk = int64(64)
 
 func reportSearchProgress(stats *SearchStats, settings AIScoreSettings) {
@@ -2629,6 +2657,10 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		}
 	}
 	rootHash := ttKeyFor(state, settings.BoardSize)
+	if scores, ok := scoreBoardFromRootTT(state, rules, settings, tt, rootHash); ok {
+		logAITask(ctx, 1, "Root TT shortcut hit depth=%d", settings.Depth)
+		return scores
+	}
 	var scores []float64
 	var lastScores []float64
 	var lastBestScore float64
@@ -2824,6 +2856,17 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 	}
 	if !rootMaximizing && len(fallbackScores) > 0 && lastBestScore >= fallbackBestScore {
 		return fallbackScores
+	}
+	expectedScores := settings.BoardSize * settings.BoardSize
+	if expectedScores <= 0 {
+		return scores
+	}
+	if len(scores) != expectedScores {
+		result := make([]float64, expectedScores)
+		for i := range result {
+			result[i] = illegalScore
+		}
+		return result
 	}
 	return scores
 }

@@ -183,3 +183,44 @@ func TestMaybeSelectLostModeMoveSkipsWhenNotLosing(t *testing.T) {
 		t.Fatalf("expected lost mode to be skipped, got %v", selected)
 	}
 }
+
+func TestBestMoveFromScoresHandlesShortScoreSlice(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 5
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerBlack
+
+	move, ok := bestMoveFromScores([]float64{}, state, rules, settings.BoardSize)
+	if !ok {
+		t.Fatalf("expected fallback legal move on short score slice")
+	}
+	if !move.IsValid(settings.BoardSize) {
+		t.Fatalf("expected valid move, got %+v", move)
+	}
+}
+
+func TestMaybeSelectLostModeMoveHandlesShortScoreSlice(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 5
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerBlack
+
+	cfg := DefaultConfig()
+	cfg.AiEnableLostMode = true
+	cfg.AiLostModeThreshold = 10.0
+	cfg.AiLostModeMinDepth = 2
+	analysisSettings := AIScoreSettings{
+		Depth:     2,
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Config:    cfg,
+	}
+
+	if _, changed := maybeSelectLostModeMove([]float64{}, state, rules, analysisSettings, Move{X: 1, Y: 1}); changed {
+		t.Fatalf("expected lost mode to skip short score slice")
+	}
+}

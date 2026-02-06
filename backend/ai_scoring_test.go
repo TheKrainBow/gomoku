@@ -354,3 +354,65 @@ func TestApplyMoveWithUndoRestoresState(t *testing.T) {
 		t.Fatalf("forced capture moves mismatch")
 	}
 }
+
+func TestScoreBoardUsesRootTTExactShortcut(t *testing.T) {
+	prev := GetConfig()
+	cfg := prev
+	cfg.AiDepth = 4
+	cfg.AiMinDepth = 4
+	cfg.AiMaxDepth = 4
+	cfg.AiQuickWinExit = false
+	cfg.AiEnableEvalCache = false
+	cfg.AiEnableAspiration = false
+	cfg.AiEnableKillerMoves = false
+	cfg.AiEnableHistoryMoves = false
+	cfg.AiTimeBudgetMs = 0
+	configStore.Update(cfg)
+	defer func() {
+		configStore.Update(prev)
+		FlushGlobalCaches()
+	}()
+
+	settings := DefaultGameSettings()
+	settings.BoardSize = 7
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerBlack
+	state.Board.Set(3, 3, CellBlack)
+	state.Board.Set(2, 3, CellWhite)
+	state.recomputeHashes()
+
+	cache := newAISearchCache()
+	tt := ensureTT(&cache, cfg)
+	if tt == nil {
+		t.Fatalf("expected TT to be initialized")
+	}
+	best := Move{X: 4, Y: 3}
+	rootKey := ttKeyFor(state, settings.BoardSize)
+	tt.Store(rootKey, 10, 1234, TTExact, best)
+
+	stats := &SearchStats{}
+	scores := ScoreBoard(state, rules, AIScoreSettings{
+		Depth:     4,
+		TimeoutMs: 0,
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Cache:     &cache,
+		Config:    cfg,
+		Stats:     stats,
+	})
+	got, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+	if !ok {
+		t.Fatalf("expected move from TT shortcut")
+	}
+	if got.X != best.X || got.Y != best.Y {
+		t.Fatalf("expected TT shortcut move (%d,%d), got (%d,%d)", best.X, best.Y, got.X, got.Y)
+	}
+	if stats.CompletedDepths < 10 {
+		t.Fatalf("expected completed depth from TT entry, got %d", stats.CompletedDepths)
+	}
+	if stats.Nodes != 0 {
+		t.Fatalf("expected no node search when TT shortcut is used, got %d", stats.Nodes)
+	}
+}

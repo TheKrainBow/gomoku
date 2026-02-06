@@ -85,11 +85,11 @@ func DefaultConfig() Config {
 		LogDepthScores: false,
 
 		// Time budget mode
-		AiTimeBudgetMs:       500,
+		AiTimeBudgetMs:       400,
 		AiBacklogEstimateMs:  120000,
 		AiTimeoutMs:          0,
 		AiDepth:              10,
-		AiMinDepth:           6,
+		AiMinDepth:           3,
 		AiMaxDepth:           10,
 		AiReturnLastComplete: true,
 

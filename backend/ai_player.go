@@ -311,7 +311,11 @@ func bestMoveFromScores(scores []float64, state GameState, rules Rules, size int
 				fallbackMove = move
 				foundFallback = true
 			}
-			score := scores[y*size+x]
+			idx := y*size + x
+			if idx < 0 || idx >= len(scores) {
+				continue
+			}
+			score := scores[idx]
 			if score == illegalScore {
 				continue
 			}
@@ -355,6 +359,10 @@ func maybeSelectLostModeMove(scores []float64, state GameState, rules Rules, set
 		return Move{}, false
 	}
 	if !currentBest.IsValid(settings.BoardSize) {
+		return Move{}, false
+	}
+	scoreCount := settings.BoardSize * settings.BoardSize
+	if scoreCount <= 0 || len(scores) < scoreCount {
 		return Move{}, false
 	}
 	bestScore := scores[currentBest.Y*settings.BoardSize+currentBest.X]
@@ -422,7 +430,11 @@ func collectLostModeCandidates(scores []float64, state GameState, rules Rules, s
 			if ok, _ := rules.IsLegal(state, move, state.ToMove); !ok {
 				continue
 			}
-			score := scores[y*size+x]
+			idx := y*size + x
+			if idx < 0 || idx >= len(scores) {
+				continue
+			}
+			score := scores[idx]
 			if score == illegalScore {
 				continue
 			}
