@@ -29,6 +29,25 @@ type ThreatWeights struct {
 	ForkFourPlus float64
 }
 
+type patternMatch struct {
+	pattern string
+	apply   func(*ThreatTotals)
+}
+
+var evalPatterns = [...]patternMatch{
+	{pattern: "MMMMM", apply: func(t *ThreatTotals) { t.Win5++ }},
+	{pattern: ".MMMM.", apply: func(t *ThreatTotals) { t.Open4++ }},
+	{pattern: "OMMMM.", apply: func(t *ThreatTotals) { t.Closed4++ }},
+	{pattern: ".MMMMO", apply: func(t *ThreatTotals) { t.Closed4++ }},
+	{pattern: ".MMM.M.", apply: func(t *ThreatTotals) { t.Broken4++ }},
+	{pattern: ".M.MMM.", apply: func(t *ThreatTotals) { t.Broken4++ }},
+	{pattern: ".MMM.", apply: func(t *ThreatTotals) { t.Open3++ }},
+	{pattern: ".MM.M.", apply: func(t *ThreatTotals) { t.Broken3++ }},
+	{pattern: ".M.MM.", apply: func(t *ThreatTotals) { t.Broken3++ }},
+	{pattern: ".MM.", apply: func(t *ThreatTotals) { t.Open2++ }},
+	{pattern: ".M.M.", apply: func(t *ThreatTotals) { t.Broken2++ }},
+}
+
 type lineCache struct {
 	mu    sync.Mutex
 	lines map[int][][]int
@@ -114,14 +133,15 @@ func EvaluateBoard(board Board, sideToMove PlayerColor, config Config) float64 {
 	lines := getLinesForSize(board.Size())
 	me := sideToMove
 	opp := otherPlayer(sideToMove)
+	tokensBuf := make([]byte, board.Size()+2)
 
 	var totalsMe ThreatTotals
 	var totalsOpp ThreatTotals
 
 	for _, line := range lines {
-		tokensMe := buildTokens(board, line, me)
-		tokensOpp := buildTokens(board, line, opp)
+		tokensMe := buildTokensInto(board, line, me, tokensBuf)
 		accumulatePatterns(tokensMe, &totalsMe)
+		tokensOpp := buildTokensInto(board, line, opp, tokensBuf)
 		accumulatePatterns(tokensOpp, &totalsOpp)
 	}
 
@@ -164,53 +184,41 @@ func resolveThreatWeights(config Config) ThreatWeights {
 	}
 }
 
-func buildTokens(board Board, line []int, player PlayerColor) []byte {
-	tokens := make([]byte, 0, len(line)+2)
-	tokens = append(tokens, 'O')
-	for _, idx := range line {
+func buildTokensInto(board Board, line []int, player PlayerColor, buf []byte) []byte {
+	needed := len(line) + 2
+	if cap(buf) < needed {
+		buf = make([]byte, needed)
+	} else {
+		buf = buf[:needed]
+	}
+	buf[0] = 'O'
+	for i, idx := range line {
 		cell := board.cells[idx]
 		switch cell {
 		case CellEmpty:
-			tokens = append(tokens, '.')
+			buf[i+1] = '.'
 		case CellBlack:
 			if player == PlayerBlack {
-				tokens = append(tokens, 'M')
+				buf[i+1] = 'M'
 			} else {
-				tokens = append(tokens, 'O')
+				buf[i+1] = 'O'
 			}
 		case CellWhite:
 			if player == PlayerWhite {
-				tokens = append(tokens, 'M')
+				buf[i+1] = 'M'
 			} else {
-				tokens = append(tokens, 'O')
+				buf[i+1] = 'O'
 			}
 		}
 	}
-	tokens = append(tokens, 'O')
-	return tokens
+	buf[needed-1] = 'O'
+	return buf
 }
 
 func accumulatePatterns(tokens []byte, totals *ThreatTotals) {
-	patterns := []struct {
-		pattern string
-		apply   func(*ThreatTotals)
-	}{
-		{"MMMMM", func(t *ThreatTotals) { t.Win5++ }},
-		{".MMMM.", func(t *ThreatTotals) { t.Open4++ }},
-		{"OMMMM.", func(t *ThreatTotals) { t.Closed4++ }},
-		{".MMMMO", func(t *ThreatTotals) { t.Closed4++ }},
-		{".MMM.M.", func(t *ThreatTotals) { t.Broken4++ }},
-		{".M.MMM.", func(t *ThreatTotals) { t.Broken4++ }},
-		{".MMM.", func(t *ThreatTotals) { t.Open3++ }},
-		{".MM.M.", func(t *ThreatTotals) { t.Broken3++ }},
-		{".M.MM.", func(t *ThreatTotals) { t.Broken3++ }},
-		{".MM.", func(t *ThreatTotals) { t.Open2++ }},
-		{".M.M.", func(t *ThreatTotals) { t.Broken2++ }},
-	}
-
 	for i := 0; i < len(tokens); i++ {
 		matched := false
-		for _, entry := range patterns {
+		for _, entry := range evalPatterns {
 			if matchAt(tokens, entry.pattern, i) {
 				entry.apply(totals)
 				i += len(entry.pattern) - 1

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +31,9 @@ func newSearchBacklog() *searchBacklog {
 }
 
 func enqueueSearchBacklogTask(state GameState, rules Rules) {
+	if !GetConfig().AiQueueEnabled {
+		return
+	}
 	if state.Hash == 0 {
 		state.recomputeHashes()
 	}
@@ -120,10 +123,84 @@ func (b *searchBacklog) shouldStop() bool {
 }
 
 func startSearchBacklogWorker(controller *GameController) {
-	go searchBacklogManager.worker(controller)
+	if !GetConfig().AiQueueEnabled {
+		return
+	}
+	workerCount := backlogWorkerCount(GetConfig(), runtime.NumCPU())
+	fmt.Printf("[ai:queue] starting workers=%d\n", workerCount)
+	searchBacklogManager.startWorkers(controller, workerCount)
 }
 
-func (b *searchBacklog) worker(controller *GameController) {
+func backlogWorkerCount(config Config, cpuCount int) int {
+	if cpuCount < 1 {
+		cpuCount = 1
+	}
+	workers := config.AiQueueWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > cpuCount {
+		workers = cpuCount
+	}
+	return workers
+}
+
+func backlogAnalyzeThreadCount(config Config, cpuCount int) int {
+	if cpuCount < 1 {
+		cpuCount = 1
+	}
+	threads := config.AiQueueAnalyzeThreads
+	if threads <= 0 {
+		threads = cpuCount / 2
+		if threads < 2 {
+			threads = 2
+		}
+		if threads > 8 {
+			threads = 8
+		}
+	}
+	if threads > cpuCount {
+		threads = cpuCount
+	}
+	if threads < 1 {
+		threads = 1
+	}
+	return threads
+}
+
+const backlogMinUsefulDepth = 6
+
+func backlogDepthRange(config Config) (int, int) {
+	target := config.AiDepth
+	if config.AiMaxDepth > 0 && config.AiMaxDepth < target {
+		target = config.AiMaxDepth
+	}
+	if target < 1 {
+		target = 1
+	}
+	start := config.AiMinDepth
+	if start < backlogMinUsefulDepth {
+		start = backlogMinUsefulDepth
+	}
+	if start < 1 {
+		start = 1
+	}
+	if start > target {
+		start = target
+	}
+	return start, target
+}
+
+func (b *searchBacklog) startWorkers(controller *GameController, count int) {
+	if count <= 0 {
+		count = 1
+	}
+	for i := 0; i < count; i++ {
+		go b.worker(controller, i)
+	}
+}
+
+func (b *searchBacklog) worker(controller *GameController, _ int) {
 	pausedLogged := false
 	for {
 		if controller != nil {
@@ -155,75 +232,263 @@ func (b *searchBacklog) worker(controller *GameController) {
 func (b *searchBacklog) processTask(task backlogTask) {
 	config := GetConfig()
 	config.AiTimeBudgetMs = 0
+	config = backlogConfig(config)
+	startDepth, targetDepth := backlogDepthRange(config)
 	stats := &SearchStats{Start: time.Now()}
+	cache := SharedSearchCache()
+	analyzeThreads := backlogAnalyzeThreadCount(config, runtime.NumCPU())
+	rootCandidates := collectCandidateMoves(task.state, task.state.ToMove, task.state.Board.Size())
+	effectiveThreads := analyzeThreads
+	if effectiveThreads > len(rootCandidates) {
+		effectiveThreads = len(rootCandidates)
+	}
+	if effectiveThreads < 1 {
+		effectiveThreads = 1
+	}
+	var progressDepth atomic.Int64
+	progressDepth.Store(int64(startDepth))
+	var progressNodes atomic.Int64
+	var progressCandidates atomic.Int64
+	var progressTTProbes atomic.Int64
+	var progressTTHits atomic.Int64
+	var progressTTCutoffs atomic.Int64
+	var progressABCutoffs atomic.Int64
 	settings := AIScoreSettings{
-		Depth:            config.AiDepth,
+		Depth:            startDepth,
 		TimeoutMs:        0,
 		BoardSize:        task.state.Board.Size(),
 		Player:           task.state.ToMove,
-		Cache:            &defaultCache,
+		Cache:            cache,
 		Config:           config,
 		Stats:            stats,
 		ShouldStop:       b.shouldStop,
 		DirectDepthOnly:  true,
 		SkipQueueBacklog: true,
 	}
+	settings.OnNodeProgress = func(delta int64) {
+		if delta > 0 {
+			progressNodes.Add(delta)
+		}
+	}
+	settings.OnSearchProgress = func(delta SearchProgressDelta) {
+		if delta.CandidateCount > 0 {
+			progressCandidates.Add(delta.CandidateCount)
+		}
+		if delta.TTProbes > 0 {
+			progressTTProbes.Add(delta.TTProbes)
+		}
+		if delta.TTHits > 0 {
+			progressTTHits.Add(delta.TTHits)
+		}
+		if delta.TTCutoffs > 0 {
+			progressTTCutoffs.Add(delta.TTCutoffs)
+		}
+		if delta.ABCutoffs > 0 {
+			progressABCutoffs.Add(delta.ABCutoffs)
+		}
+	}
 	remaining := b.Len()
 	boardHash := ttKeyFor(task.state, task.state.Board.Size())
-	fmt.Printf("[ai:queue] analyzing board 0x%x with depth %d. %d remains in queue\n", boardHash, settings.Depth, remaining)
-
-	rootCandidates := collectCandidateMoves(task.state, task.state.ToMove, task.state.Board.Size())
-	estimatedNodes := estimateNodes(len(rootCandidates), settings.Depth)
-	if estimatedNodes <= 0 {
-		estimatedNodes = 1
-	}
+	fmt.Printf("[ai:queue] analyzing board 0x%x depth [%d->%d] using threads=%d. %d remains in queue\n",
+		boardHash, startDepth, targetDepth, effectiveThreads, remaining)
+	logMemUsage(fmt.Sprintf("start board 0x%x", boardHash))
 
 	start := time.Now()
+	maxElapsedMs := config.AiBacklogEstimateMs
 	progressDone := make(chan struct{})
 	progressTicker := time.NewTicker(5 * time.Second)
 	go func() {
+		lastTick := start
+		var (
+			lastNodes      int64
+			lastCandidates int64
+			lastTTProbes   int64
+			lastTTHits     int64
+			lastTTCutoffs  int64
+			lastABCutoffs  int64
+		)
 		defer progressTicker.Stop()
 		for {
 			select {
 			case <-progressDone:
 				return
 			case <-progressTicker.C:
-				elapsed := time.Since(start)
-				nodes := float64(stats.Nodes)
-				percent := math.Min(100, nodes/estimatedNodes*100)
-				fmt.Printf("[ai:queue] progress board 0x%x %.0f%% (elapsed %dms, nodes %.0f)\n", boardHash, percent, elapsed.Milliseconds(), nodes)
+				now := time.Now()
+				elapsed := now.Sub(start)
+				nodesValue := progressNodes.Load()
+				if nodesValue == 0 {
+					nodesValue = stats.Nodes
+				}
+				candidatesValue := progressCandidates.Load()
+				ttProbesValue := progressTTProbes.Load()
+				ttHitsValue := progressTTHits.Load()
+				ttCutoffsValue := progressTTCutoffs.Load()
+				abCutoffsValue := progressABCutoffs.Load()
+
+				intervalMs := now.Sub(lastTick).Milliseconds()
+				if intervalMs <= 0 {
+					intervalMs = 1
+				}
+				deltaNodes := nodesValue - lastNodes
+				deltaCandidates := candidatesValue - lastCandidates
+				deltaTTProbes := ttProbesValue - lastTTProbes
+				deltaTTHits := ttHitsValue - lastTTHits
+				deltaTTCutoffs := ttCutoffsValue - lastTTCutoffs
+				deltaABCutoffs := abCutoffsValue - lastABCutoffs
+				nps := int64(0)
+				if deltaNodes > 0 {
+					nps = deltaNodes * 1000 / intervalMs
+				}
+				avgBranch := 0.0
+				if deltaNodes > 0 && deltaCandidates > 0 {
+					avgBranch = float64(deltaCandidates) / float64(deltaNodes)
+				}
+				ttHitRate := 0.0
+				if deltaTTProbes > 0 && deltaTTHits > 0 {
+					ttHitRate = float64(deltaTTHits) * 100.0 / float64(deltaTTProbes)
+				}
+				cutoffReason := "none"
+				if deltaTTCutoffs > deltaABCutoffs && deltaTTCutoffs > 0 {
+					cutoffReason = "TT"
+				} else if deltaABCutoffs > deltaTTCutoffs && deltaABCutoffs > 0 {
+					cutoffReason = "AB"
+				} else if deltaTTCutoffs > 0 && deltaABCutoffs > 0 {
+					cutoffReason = "tie"
+				}
+				currentDepth := int(progressDepth.Load())
+				if currentDepth < startDepth {
+					currentDepth = startDepth
+				}
+				if currentDepth > targetDepth {
+					currentDepth = targetDepth
+				}
+				fmt.Printf("[ai:queue] hash 0x%x [%d/%d] (%dms, %d nodes, %d nps, b=%.2f, tt=%.1f%%, cutoff=%s)\n",
+					boardHash, currentDepth, targetDepth, elapsed.Milliseconds(), nodesValue, nps, avgBranch, ttHitRate, cutoffReason)
+
+				lastTick = now
+				lastNodes = nodesValue
+				lastCandidates = candidatesValue
+				lastTTProbes = ttProbesValue
+				lastTTHits = ttHitsValue
+				lastTTCutoffs = ttCutoffsValue
+				lastABCutoffs = abCutoffsValue
 			}
 		}
 	}()
 
-	scores := ScoreBoard(task.state.Clone(), task.rules, settings)
+	completed := true
+	completedDepth := startDepth - 1
+	for depth := startDepth; depth <= targetDepth; depth++ {
+		if b.shouldStop() {
+			completed = false
+			break
+		}
+		if maxElapsedMs > 0 && time.Since(start).Milliseconds() >= int64(maxElapsedMs) && completedDepth >= startDepth {
+			completed = false
+			fmt.Printf("[ai:queue] budget reached board 0x%x at depth [%d/%d], requeuing for deeper analysis\n",
+				boardHash, completedDepth, targetDepth)
+			break
+		}
+		progressDepth.Store(int64(depth))
+		depthStart := time.Now()
+		beforeNodes := stats.Nodes
+		beforeTTProbes := stats.TTProbes
+		beforeTTHits := stats.TTHits
+		beforeTTExactHits := stats.TTExactHits
+		beforeTTLowerHits := stats.TTLowerHits
+		beforeTTUpperHits := stats.TTUpperHits
+		beforeCutoffs := stats.Cutoffs
+		beforeTTCutoffs := stats.TTCutoffs
+		beforeABCutoffs := stats.ABCutoffs
+		depthSettings := settings
+		depthSettings.Depth = depth
+		if effectiveThreads > 1 {
+			_, completed = ScoreBoardDirectDepthParallel(task.state.Clone(), task.rules, depthSettings, effectiveThreads)
+		} else {
+			_ = ScoreBoard(task.state.Clone(), task.rules, depthSettings)
+			completed = stats.CompletedDepths >= depth
+		}
+		if !completed || stats.CompletedDepths < depth {
+			completed = false
+			break
+		}
+		completedDepth = depth
+		depthElapsedMs := time.Since(depthStart).Milliseconds()
+		deltaNodes := stats.Nodes - beforeNodes
+		deltaTTProbes := stats.TTProbes - beforeTTProbes
+		deltaTTHits := stats.TTHits - beforeTTHits
+		deltaTTExactHits := stats.TTExactHits - beforeTTExactHits
+		deltaTTLowerHits := stats.TTLowerHits - beforeTTLowerHits
+		deltaTTUpperHits := stats.TTUpperHits - beforeTTUpperHits
+		deltaCutoffs := stats.Cutoffs - beforeCutoffs
+		deltaTTCutoffs := stats.TTCutoffs - beforeTTCutoffs
+		deltaABCutoffs := stats.ABCutoffs - beforeABCutoffs
+		nps := int64(0)
+		if depthElapsedMs > 0 {
+			nps = deltaNodes * 1000 / depthElapsedMs
+		}
+		fmt.Printf("[ai:queue] depth [%d/%d] complete in %dms nodes=%d nps=%d tt_probe=%d tt_hit=%d tt_hit_flag=(e:%d l:%d u:%d) cutoffs=%d tt_cutoff=%d ab_cutoff=%d\n",
+			depth, targetDepth, depthElapsedMs, deltaNodes, nps, deltaTTProbes, deltaTTHits, deltaTTExactHits, deltaTTLowerHits, deltaTTUpperHits, deltaCutoffs, deltaTTCutoffs, deltaABCutoffs)
+	}
 	close(progressDone)
 	progressTicker.Stop()
-	_ = scores
+	logMemUsage(fmt.Sprintf("done board 0x%x", boardHash))
 
 	elapsed := time.Since(start)
 	if b.shouldStop() {
 		fmt.Printf("[ai:queue] interrupted board 0x%x after %dms (game started), requeuing\n", boardHash, elapsed.Milliseconds())
 	} else {
-		fmt.Printf("[ai:queue] analyzing board 0x%x finished in %dms\n", boardHash, elapsed.Milliseconds())
+		fmt.Printf("[ai:queue] analyzing board 0x%x finished in %dms depth=[%d/%d] tt_size=%d\n",
+			boardHash, elapsed.Milliseconds(), completedDepth, targetDepth, TranspositionSize(cache))
 	}
-	if b.shouldStop() || stats.CompletedDepths < settings.Depth {
+	if b.shouldStop() || !completed || completedDepth < targetDepth {
 		b.enqueue(task, true)
 		return
 	}
 }
 
-func estimateNodes(rootCandidates, depth int) float64 {
-	if depth <= 0 || rootCandidates <= 0 {
-		return float64(depth + 1)
+func backlogConfig(base Config) Config {
+	base.AiEnableTacticalMode = false
+	base.AiEnableTacticalExt = false
+	base.AiEnableTacticalK = false
+	base.AiEnableAspiration = false
+	base.AiEnableDynamicTopK = false
+	base.AiMaxCandidatesRoot = 8
+	base.AiMaxCandidatesMid = 4
+	base.AiMaxCandidatesDeep = 2
+	base.AiTopCandidates = 0
+	return base
+}
+
+func logMemUsage(prefix string) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	fmt.Printf("[ai:queue] %s mem alloc=%s heap_alloc=%s total_alloc=%s sys=%s num_gc=%d\n",
+		prefix,
+		formatBytes(mem.Alloc),
+		formatBytes(mem.HeapAlloc),
+		formatBytes(mem.TotalAlloc),
+		formatBytes(mem.Sys),
+		mem.NumGC)
+}
+
+func formatBytes(n uint64) string {
+	const (
+		kb = 1 << (10 * 1)
+		mb = 1 << (10 * 2)
+		gb = 1 << (10 * 3)
+		tb = 1 << (10 * 4)
+	)
+	switch {
+	case n >= tb:
+		return fmt.Sprintf("%.2f TB", float64(n)/float64(tb))
+	case n >= gb:
+		return fmt.Sprintf("%.2f GB", float64(n)/float64(gb))
+	case n >= mb:
+		return fmt.Sprintf("%.2f MB", float64(n)/float64(mb))
+	case n >= kb:
+		return fmt.Sprintf("%.2f kB", float64(n)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", n)
 	}
-	branch := float64(rootCandidates)
-	if branch < 1 {
-		branch = 1
-	}
-	total := 0.0
-	for d := 0; d <= depth; d++ {
-		total += math.Pow(branch, float64(d))
-	}
-	return total
 }

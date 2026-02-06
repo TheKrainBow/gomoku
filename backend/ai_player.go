@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,7 +14,6 @@ import (
 type AIPlayer struct {
 	ghostMutex    sync.Mutex
 	moveMutex     sync.Mutex
-	cacheMutex    sync.Mutex
 	workerDone    chan struct{}
 	thinking      atomic.Bool
 	moveReady     atomic.Bool
@@ -20,7 +21,6 @@ type AIPlayer struct {
 	stopSignal    atomic.Bool
 	readyMove     Move
 	ghostBoard    Board
-	cache         AISearchCache
 	ponderMu      sync.Mutex
 	ponderCond    *sync.Cond
 	ponderState   GameState
@@ -33,9 +33,7 @@ type AIPlayer struct {
 }
 
 func NewAIPlayer() *AIPlayer {
-	player := &AIPlayer{
-		cache: newAISearchCache(),
-	}
+	player := &AIPlayer{}
 	player.ponderCond = sync.NewCond(&player.ponderMu)
 	player.startPonderWorker()
 	return player
@@ -48,19 +46,23 @@ func (a *AIPlayer) IsHuman() bool {
 func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
 	config := GetConfig()
 	stats := &SearchStats{Start: time.Now()}
+	cache := SharedSearchCache()
 	settings := AIScoreSettings{
 		Depth:     config.AiDepth,
 		TimeoutMs: config.AiTimeoutMs,
 		BoardSize: state.Board.Size(),
 		Player:    state.ToMove,
-		Cache:     &a.cache,
+		Cache:     cache,
 		Config:    config,
 		Stats:     stats,
 	}
-	a.cacheMutex.Lock()
 	scores := ScoreBoard(state, rules, settings)
-	a.cacheMutex.Unlock()
 	bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+	if ok {
+		if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, settings, bestMove); changed {
+			bestMove = lostModeMove
+		}
+	}
 	if config.AiLogSearchStats {
 		logSearchStats("choose", stats, settings)
 	}
@@ -91,12 +93,13 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 	go func() {
 		defer close(done)
 		stats := &SearchStats{Start: time.Now()}
+		cache := SharedSearchCache()
 		settings := AIScoreSettings{
 			Depth:      config.AiDepth,
 			TimeoutMs:  config.AiTimeoutMs,
 			BoardSize:  stateCopy.Board.Size(),
 			Player:     stateCopy.ToMove,
-			Cache:      &a.cache,
+			Cache:      cache,
 			Config:     config,
 			ShouldStop: func() bool { return a.stopSignal.Load() },
 			Stats:      stats,
@@ -119,9 +122,7 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 				ghostSink(gs)
 			}
 		}
-		a.cacheMutex.Lock()
 		scores := ScoreBoard(stateCopy, rulesCopy, settings)
-		a.cacheMutex.Unlock()
 		if a.stopSignal.Load() {
 			a.moveReady.Store(false)
 			a.ghostActive.Store(false)
@@ -129,6 +130,11 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 			return
 		}
 		bestMove, ok := bestMoveFromScores(scores, stateCopy, rulesCopy, settings.BoardSize)
+		if ok {
+			if lostModeMove, changed := maybeSelectLostModeMove(scores, stateCopy, rulesCopy, settings, bestMove); changed {
+				bestMove = lostModeMove
+			}
+		}
 		if settings.Config.AiLogSearchStats {
 			logSearchStats("think", settings.Stats, settings)
 		}
@@ -172,30 +178,16 @@ func (a *AIPlayer) GhostBoardCopy() Board {
 }
 
 func (a *AIPlayer) OnMoveApplied(state GameState, rules Rules) {
-	a.cacheMutex.Lock()
-	defer a.cacheMutex.Unlock()
-	ensureTT(&a.cache, GetConfig())
-	if a.cache.TT != nil {
-		a.cache.TT.NextGeneration()
-	}
-	if a.cache.EvalCache != nil {
-		a.cache.EvalCache.NextGeneration()
-	}
-	RerootCache(&a.cache, state)
+	ensureTT(SharedSearchCache(), GetConfig())
 	a.updatePonderState(state, rules)
 }
 
 func (a *AIPlayer) CacheSize() int {
-	a.cacheMutex.Lock()
-	defer a.cacheMutex.Unlock()
-	return TranspositionSize(a.cache)
+	return TranspositionSize(SharedSearchCache())
 }
 
 func (a *AIPlayer) ResetForConfigChange() {
 	a.stopSignal.Store(true)
-	a.cacheMutex.Lock()
-	a.cache = newAISearchCache()
-	a.cacheMutex.Unlock()
 	a.ponderReady.Store(false)
 	a.stopSignal.Store(false)
 }
@@ -222,23 +214,27 @@ func (a *AIPlayer) startPonderWorker() {
 				state.recomputeHashes()
 			}
 			stats := &SearchStats{Start: time.Now()}
+			cache := SharedSearchCache()
 			settings := AIScoreSettings{
 				Depth:      config.AiDepth,
 				TimeoutMs:  config.AiTimeoutMs,
 				BoardSize:  state.Board.Size(),
 				Player:     state.ToMove,
-				Cache:      &a.cache,
+				Cache:      cache,
 				Config:     config,
 				ShouldStop: func() bool { return a.stopSignal.Load() || a.ponderVersion.Load() != version },
 				Stats:      stats,
 			}
-			a.cacheMutex.Lock()
 			scores := ScoreBoard(state, rules, settings)
-			a.cacheMutex.Unlock()
 			if a.stopSignal.Load() || a.ponderVersion.Load() != version {
 				continue
 			}
 			bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+			if ok {
+				if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, settings, bestMove); changed {
+					bestMove = lostModeMove
+				}
+			}
 			if settings.Config.AiLogSearchStats {
 				logSearchStats("ponder", stats, settings)
 			}
@@ -296,24 +292,226 @@ func (a *AIPlayer) TakePonderedMove(state GameState, rules Rules) (Move, bool) {
 }
 
 func bestMoveFromScores(scores []float64, state GameState, rules Rules, size int) (Move, bool) {
-	bestScore := math.Inf(-1)
+	maximizing := state.ToMove == PlayerBlack
+	bestScore := math.Inf(1)
+	if maximizing {
+		bestScore = math.Inf(-1)
+	}
 	bestMove := Move{}
+	foundScored := false
+	fallbackMove := Move{}
+	foundFallback := false
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			move := Move{X: x, Y: y}
+			if ok, _ := rules.IsLegal(state, move, state.ToMove); !ok {
+				continue
+			}
+			if !foundFallback {
+				fallbackMove = move
+				foundFallback = true
+			}
 			score := scores[y*size+x]
-			if score > bestScore {
-				if ok, _ := rules.IsLegal(state, move, state.ToMove); ok {
-					bestScore = score
-					bestMove = move
+			if score == illegalScore {
+				continue
+			}
+			foundScored = true
+			if maximizing && score > bestScore {
+				bestScore = score
+				bestMove = move
+			}
+			if !maximizing && score < bestScore {
+				bestScore = score
+				bestMove = move
+			}
+		}
+	}
+	if !foundScored {
+		if foundFallback {
+			return fallbackMove, true
+		}
+		return Move{}, false
+	}
+	return bestMove, true
+}
+
+type lostModeCandidate struct {
+	move  Move
+	score float64
+}
+
+var lostModeFragilityFn = opponentReplyFragilityGap
+
+func maybeSelectLostModeMove(scores []float64, state GameState, rules Rules, settings AIScoreSettings, currentBest Move) (Move, bool) {
+	cfg := settings.Config
+	if !cfg.AiEnableLostMode {
+		return Move{}, false
+	}
+	minDepth := cfg.AiLostModeMinDepth
+	if minDepth < 2 {
+		minDepth = 2
+	}
+	if settings.Depth < minDepth || settings.BoardSize <= 0 {
+		return Move{}, false
+	}
+	if !currentBest.IsValid(settings.BoardSize) {
+		return Move{}, false
+	}
+	bestScore := scores[currentBest.Y*settings.BoardSize+currentBest.X]
+	threshold := cfg.AiLostModeThreshold
+	if threshold <= 0 {
+		threshold = winScore / 2
+	}
+	maximizing := state.ToMove == PlayerBlack
+	losing := (maximizing && bestScore <= -threshold) || (!maximizing && bestScore >= threshold)
+	if !losing {
+		return Move{}, false
+	}
+
+	candidates := collectLostModeCandidates(scores, state, rules, settings.BoardSize, maximizing)
+	if len(candidates) == 0 {
+		return Move{}, false
+	}
+	maxMoves := cfg.AiLostModeMaxMoves
+	if maxMoves <= 0 {
+		maxMoves = 6
+	}
+	if len(candidates) > maxMoves {
+		candidates = candidates[:maxMoves]
+	}
+
+	chosen := currentBest
+	chosenGap := -1.0
+	chosenScore := bestScore
+	for _, cand := range candidates {
+		gap, ok := lostModeFragilityFn(state, rules, settings, cand.move)
+		if !ok {
+			continue
+		}
+		if gap > chosenGap {
+			chosen = cand.move
+			chosenGap = gap
+			chosenScore = cand.score
+			continue
+		}
+		if gap == chosenGap {
+			if maximizing {
+				if cand.score > chosenScore {
+					chosen = cand.move
+					chosenScore = cand.score
+				}
+			} else {
+				if cand.score < chosenScore {
+					chosen = cand.move
+					chosenScore = cand.score
 				}
 			}
 		}
 	}
-	if math.IsInf(bestScore, -1) {
+	if chosen == currentBest {
 		return Move{}, false
 	}
-	return bestMove, true
+	return chosen, true
+}
+
+func collectLostModeCandidates(scores []float64, state GameState, rules Rules, size int, maximizing bool) []lostModeCandidate {
+	out := make([]lostModeCandidate, 0, size)
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			move := Move{X: x, Y: y}
+			if ok, _ := rules.IsLegal(state, move, state.ToMove); !ok {
+				continue
+			}
+			score := scores[y*size+x]
+			if score == illegalScore {
+				continue
+			}
+			out = append(out, lostModeCandidate{move: move, score: score})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if maximizing {
+			return out[i].score > out[j].score
+		}
+		return out[i].score < out[j].score
+	})
+	return out
+}
+
+func opponentReplyFragilityGap(state GameState, rules Rules, settings AIScoreSettings, move Move) (float64, bool) {
+	next := state.Clone()
+	if !applyMove(&next, rules, move, state.ToMove) {
+		return 0.0, false
+	}
+	opponent := next.ToMove
+	oppMaximizing := opponent == PlayerBlack
+	replyCandidates := collectCandidateMoves(next, opponent, settings.BoardSize)
+	if len(replyCandidates) == 0 {
+		return 0.0, false
+	}
+	replyLimit := settings.Config.AiLostModeReplyLimit
+	if replyLimit <= 0 {
+		replyLimit = 12
+	}
+	if replyLimit > len(replyCandidates) {
+		replyLimit = len(replyCandidates)
+	}
+	ctx := minimaxContext{
+		rules:    rules,
+		settings: settings,
+		start:    time.Now(),
+	}
+	replies := orderCandidateMoves(next, ctx, opponent, oppMaximizing, 1, replyCandidates, replyLimit, nil)
+	if len(replies) == 0 {
+		return 0.0, false
+	}
+
+	best := 0.0
+	second := 0.0
+	haveBest := false
+	haveSecond := false
+	for _, reply := range replies {
+		replyState := next.Clone()
+		if !applyMove(&replyState, rules, reply, opponent) {
+			continue
+		}
+		score := evaluateStateHeuristic(replyState, rules, settings)
+		if oppMaximizing {
+			if !haveBest || score > best {
+				second = best
+				haveSecond = haveBest
+				best = score
+				haveBest = true
+				continue
+			}
+			if !haveSecond || score > second {
+				second = score
+				haveSecond = true
+			}
+			continue
+		}
+		if !haveBest || score < best {
+			second = best
+			haveSecond = haveBest
+			best = score
+			haveBest = true
+			continue
+		}
+		if !haveSecond || score < second {
+			second = score
+			haveSecond = true
+		}
+	}
+	if !haveBest {
+		return 0.0, false
+	}
+	if !haveSecond {
+		return 0.0, true
+	}
+	if oppMaximizing {
+		return best - second, true
+	}
+	return second - best, true
 }
 
 func logSearchStats(tag string, stats *SearchStats, settings AIScoreSettings) {
@@ -348,23 +546,57 @@ func logSearchStats(tag string, stats *SearchStats, settings AIScoreSettings) {
 	if elapsed > 0 {
 		nps = float64(stats.Nodes) / elapsed.Seconds()
 	}
-	fmt.Printf("[ai:%s] t=%dms depth=%d completed=%d nodes=%d nps=%.0f tt_probe=%d tt_hit=%d tt_store=%d tt_over=%d cutoffs=%d avg_branch=%.2f avg_root=%.2f avg_deep=%.2f eval_probe=%d eval_hit=%d depth_times=[%s]\\n",
+	ttHitRate := 0.0
+	if stats.TTProbes > 0 {
+		ttHitRate = float64(stats.TTHits) * 100.0 / float64(stats.TTProbes)
+	}
+	ttReplaceRate := 0.0
+	if stats.TTStores > 0 {
+		ttReplaceRate = float64(stats.TTReplacements) * 100.0 / float64(stats.TTStores)
+	}
+	ttCutoffRate := 0.0
+	if stats.Cutoffs > 0 {
+		ttCutoffRate = float64(stats.TTCutoffs) * 100.0 / float64(stats.Cutoffs)
+	}
+	evalHitRate := 0.0
+	if stats.EvalCacheProbes > 0 {
+		evalHitRate = float64(stats.EvalCacheHits) * 100.0 / float64(stats.EvalCacheProbes)
+	}
+	ttSize := 0
+	ttSize = TranspositionSize(settings.Cache)
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	fmt.Printf("[ai:%s] t=%dms depth=%d completed=%d nodes=%d nps=%.0f tt_size=%d tt_probe=%d tt_hit=%d tt_hit_rate=%.1f%% tt_hit_flag=(e:%d l:%d u:%d) tt_store=%d tt_replace=%d tt_replace_rate=%.1f%% cutoffs=%d tt_cutoff=%d ab_cutoff=%d tt_cutoff_rate=%.1f%% avg_branch=%.2f avg_root=%.2f avg_deep=%.2f eval_probe=%d eval_hit=%d eval_hit_rate=%.1f%% mem_alloc=%s mem_heap=%s mem_total=%s mem_sys=%s depth_times=[%s]\\n",
 		tag,
 		elapsed.Milliseconds(),
 		settings.Depth,
 		stats.CompletedDepths,
 		stats.Nodes,
 		nps,
+		ttSize,
 		stats.TTProbes,
 		stats.TTHits,
+		ttHitRate,
+		stats.TTExactHits,
+		stats.TTLowerHits,
+		stats.TTUpperHits,
 		stats.TTStores,
-		stats.TTOverwrites,
+		stats.TTReplacements,
+		ttReplaceRate,
 		stats.Cutoffs,
+		stats.TTCutoffs,
+		stats.ABCutoffs,
+		ttCutoffRate,
 		avgBranch,
 		avgRoot,
 		avgDeep,
 		stats.EvalCacheProbes,
 		stats.EvalCacheHits,
+		evalHitRate,
+		formatBytes(mem.Alloc),
+		formatBytes(mem.HeapAlloc),
+		formatBytes(mem.TotalAlloc),
+		formatBytes(mem.Sys),
 		strings.Join(parts, ","),
 	)
 }

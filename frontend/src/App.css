@@ -306,3 +306,100 @@ button.danger {
   align-items: center;
   gap: 8px;
 }
+
+.app-header {
+  width: 100%;
+  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 32px;
+}
+
+.app-header p {
+  margin: 0;
+  color: #9da5b4;
+}
+
+.analyse-link {
+  color: #9da5b4;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 2px;
+  font-size: 14px;
+}
+
+.analyse-link:hover {
+  border-color: #9da5b4;
+}
+
+.analysis-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analyse-page .board-panel {
+  height: auto;
+  padding: 16px;
+}
+
+.analysis-layout .stats-panel {
+  grid-column: 1 / -1;
+}
+
+.analysis-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #d7dfe9;
+}
+
+.pill.ok {
+  background: rgba(64, 206, 162, 0.2);
+}
+
+.analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.stat-card {
+  background: rgba(15, 18, 27, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-card span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.stat-help {
+  opacity: 0.6;
+}
+
+.board-cell.best-move {
+  border-color: #fdc60d !important;
+  box-shadow: 0 0 10px rgba(253, 198, 13, 0.6);
+}

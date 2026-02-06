@@ -58,30 +58,33 @@ The AI short-circuits in two key cases:
 - **Immediate win exit** (`AiQuickWinExit`): if any candidate move is an immediate win (alignment or capture win), that move is chosen without deeper search.
 - **Must-block detection**: before deeper search, the AI checks if the opponent has any immediate winning move. If so, it evaluates only moves that prevent that win.
 
-These checks use cached helpers:
-
-- `isImmediateWinCached`
-- `hasImmediateWinCached`
+These checks use dedicated helper scans (`isImmediateWinCached`, `hasImmediateWinCached`) but no longer persist unbounded immediate-win maps.
 
 ## Minimax details
 
-- Search alternates between players, with the AI as the maximizing player.
+- Search alternates between players, with **Black always maximizing** and **White minimizing**.
 - The terminal evaluation is `evaluateStateHeuristic`:
-  - Returns a large positive/negative score for a won/lost terminal state.
-  - Otherwise, returns the difference between the best AI move and the best opponent move.
+  - Returns a large positive score for Black win and a large negative score for White win.
+  - Otherwise, returns a board heuristic in the same Black-positive / White-negative convention.
 - Alpha and beta bounds are updated on each candidate.
 - If `AiTimeoutMs` expires, the search stops at the current depth and returns the best known evaluation.
 
 ## Caching and transposition table
 
-Multiple caches reduce repeated work:
+The backend now uses only two bounded caches:
 
-- **Transposition table (TT)**: fixed-size, set-associative table with bounded eviction. Stores the best value, bound type (exact/lower/upper), and best move at a given depth.
-- **Move cache**: stores evaluated move scores for a given `(state, depth, move)`.
-- **Immediate win caches**: store whether a move or state yields an immediate win.
-- **Depth cache**: stores entire score grids for a `(board hash, depth, board size, player)`.
+- **Search TT (mandatory)**: fixed-size transposition table with depth-aware entries (`EXACT` / `LOWER` / `UPPER`), best move, and logical generation aging.
+- **Eval cache (optional)**: fixed-size heuristic cache keyed by full state hash + side to move, with generation-based eviction and selective storage threshold.
 
-The TT is never fully cleared; entries are evicted by age/depth to keep memory bounded. This keeps reuse high across moves.
+Removed caches:
+
+- board-pattern score cache
+- depth score-grid cache
+- move-score cache
+- immediate-win state/map caches
+- translated/shifted TT
+
+Only the Search TT is allowed to influence alpha-beta pruning.
 
 ### Hashing
 
@@ -93,15 +96,15 @@ The AI uses **Zobrist hashing** for cache keys. The hash includes:
 
 This prevents illegal TT collisions between states that look similar but differ in captures or turn.
 
-### Cache re-rooting
+### Aging policy
 
-After each applied move, `RerootCache` prunes cached states that are no longer reachable from the current root. This keeps the cache aligned with the actual game progression and limits memory growth.
+Both Search TT and Eval cache use logical generations (no wall-clock timestamps). Entries are replaced by strict depth/flag/age policy, which keeps memory bounded and deterministic.
 
 ## Pondering (background search)
 
 An AI worker goroutine keeps searching the current root position even when it is not the AI’s turn. This fills the TT and often produces an instant move response when the AI turn arrives.
 
-- The worker reroots whenever a move is applied.
+- The worker keeps exploring when enabled and stores only Search TT results.
 - Searches are interrupted when a new root version arrives.
 - Only the AI’s own turn can consume the “pondered” best move; otherwise the work is still reused via TT.
 
@@ -135,6 +138,10 @@ The AI is controlled by both **game settings** and **global config**.
 - `AiTtUseSetAssoc`: toggles set-associative buckets (false = direct-mapped).
 - `AiLogSearchStats`: logs search stats per move.
 - `AiTtMaxEntries`: legacy fallback if `AiTtSize` is unset.
+- `AiEnableEvalCache`: enables/disables heuristic eval cache.
+- `AiEvalCacheSize`: eval cache size (rounded to power-of-two).
+- `AiEvalCacheMinAbs`: only store eval entries with `abs(score) >= threshold`.
+- `AiEnableQueue`: when enabled the async backlog worker continues searching interrupted boards; disable to skip the queue entirely.
 - `GhostMode`: enables ghost updates.
 - `Heuristics`: all threat pattern weights and fork bonuses are centralized here (see `backend/config.go`).
 

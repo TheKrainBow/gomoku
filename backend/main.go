@@ -72,6 +72,44 @@ type settingsPayload struct {
 	Config   Config          `json:"config"`
 }
 
+type analyseMove struct {
+	X     int     `json:"x"`
+	Y     int     `json:"y"`
+	Score float64 `json:"score"`
+	Depth int     `json:"depth"`
+	Valid bool    `json:"valid"`
+}
+
+type analyseResponse struct {
+	BestMove        analyseMove `json:"best_move"`
+	DepthUsed       int         `json:"depth_used"`
+	DurationMs      int64       `json:"duration_ms"`
+	Nodes           int64       `json:"nodes"`
+	HeuristicCalls  int64       `json:"heuristic_calls"`
+	HeuristicTimeMs int64       `json:"heuristic_time_ms"`
+	AvgHeuristicMs  float64     `json:"avg_heuristic_ms"`
+	BoardGenTimeMs  int64       `json:"board_gen_time_ms"`
+	BoardGenOps     int64       `json:"board_gen_ops"`
+	TTProbes        int64       `json:"tt_probes"`
+	TTHits          int64       `json:"tt_hits"`
+	TTExactHits     int64       `json:"tt_exact_hits"`
+	TTLowerHits     int64       `json:"tt_lower_hits"`
+	TTUpperHits     int64       `json:"tt_upper_hits"`
+	TTStores        int64       `json:"tt_stores"`
+	TTOverwrites    int64       `json:"tt_overwrites"`
+	TTReplacements  int64       `json:"tt_replacements"`
+	Cutoffs         int64       `json:"cutoffs"`
+	TTCutoffs       int64       `json:"tt_cutoffs"`
+	ABCutoffs       int64       `json:"ab_cutoffs"`
+}
+
+type analyseRequest struct {
+	Board        [][]int `json:"board"`
+	Depth        int     `json:"depth"`
+	NextPlayer   int     `json:"next_player"`
+	UseTempCache bool    `json:"use_temp_cache"`
+}
+
 func main() {
 	controller := NewGameController(DefaultGameSettings())
 	startSearchBacklogWorker(controller)
@@ -156,6 +194,7 @@ func main() {
 		if payload.Config != nil {
 			configStore.Update(*payload.Config)
 			controller.ResetForConfigChange()
+			FlushGlobalCaches()
 		}
 		if payload.Settings != nil {
 			settings := settingsFromDTO(*payload.Settings, controller.Settings())
@@ -184,6 +223,10 @@ func main() {
 			hub.broadcastHistory <- historyPayload{History: []historyEntryDTO{historyEntryToDTO(entry)}}
 		}
 		writeJSON(w, http.StatusOK, controllerStatus(controller))
+	})
+
+	r.Post("/api/analyse", func(w http.ResponseWriter, r *http.Request) {
+		handleAnalyseRequest(w, r)
 	})
 
 	r.Get("/ws/", func(w http.ResponseWriter, r *http.Request) {
@@ -318,11 +361,29 @@ func cellToInt(cell Cell) int {
 	}
 }
 
+func intToCell(value int) Cell {
+	switch value {
+	case 1:
+		return CellBlack
+	case 2:
+		return CellWhite
+	default:
+		return CellEmpty
+	}
+}
+
 func playerToInt(player PlayerColor) int {
 	if player == PlayerBlack {
 		return 1
 	}
 	return 2
+}
+
+func intToPlayer(value int) PlayerColor {
+	if value == 2 {
+		return PlayerWhite
+	}
+	return PlayerBlack
 }
 
 func winnerFromStatus(status GameStatus) int {
@@ -358,6 +419,131 @@ func historyToDTO(history MoveHistory) []historyEntryDTO {
 		result = append(result, historyEntryToDTO(entry))
 	}
 	return result
+}
+
+func handleAnalyseRequest(w http.ResponseWriter, r *http.Request) {
+	var payload analyseRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	boardSize := len(payload.Board)
+	if boardSize == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board required"})
+		return
+	}
+	if boardSize < 3 || boardSize > 25 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board size must be 3-25"})
+		return
+	}
+	for _, row := range payload.Board {
+		if len(row) != boardSize {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board must be square"})
+			return
+		}
+	}
+
+	if payload.Depth <= 0 {
+		payload.Depth = 1
+	}
+	config := GetConfig()
+	maxDepth := config.AiMaxDepth
+	if maxDepth <= 0 {
+		maxDepth = payload.Depth
+	}
+	if payload.Depth > maxDepth {
+		payload.Depth = maxDepth
+	}
+
+	settings := DefaultGameSettings()
+	settings.BoardSize = boardSize
+	state := GameState{Board: NewBoard(boardSize)}
+	for y, row := range payload.Board {
+		for x, value := range row {
+			state.Board.Set(x, y, intToCell(value))
+		}
+	}
+	state.ToMove = intToPlayer(payload.NextPlayer)
+	state.Status = StatusRunning
+	state.HasLastMove = false
+	state.LastMove = Move{X: -1, Y: -1}
+	state.CapturedBlack = 0
+	state.CapturedWhite = 0
+	state.MustCapture = false
+	state.ForcedCaptureMoves = nil
+	state.LastMessage = ""
+	state.WinningLine = nil
+	state.recomputeHashes()
+
+	rules := NewRules(settings)
+	stats := &SearchStats{Start: time.Now()}
+	config.AiDepth = payload.Depth
+	if !payload.UseTempCache {
+		unlock := lockDefaultCache()
+		defer unlock()
+	}
+	cache := SharedSearchCache()
+	var tempCache AISearchCache
+	if payload.UseTempCache {
+		tempCache = newAISearchCache()
+		cache = &tempCache
+	}
+	analysisSettings := AIScoreSettings{
+		Depth:           payload.Depth,
+		TimeoutMs:       0,
+		BoardSize:       boardSize,
+		Player:          state.ToMove,
+		Cache:           cache,
+		Config:          config,
+		Stats:           stats,
+		DirectDepthOnly: true,
+	}
+	scores := ScoreBoard(state, rules, analysisSettings)
+	bestMove, ok := bestMoveFromScores(scores, state, rules, analysisSettings.BoardSize)
+	if ok {
+		if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, analysisSettings, bestMove); changed {
+			bestMove = lostModeMove
+		}
+	}
+	best := analyseMove{}
+	if ok {
+		score := scores[bestMove.Y*analysisSettings.BoardSize+bestMove.X]
+		best = analyseMove{
+			X:     bestMove.X,
+			Y:     bestMove.Y,
+			Score: score,
+			Depth: bestMove.Depth,
+			Valid: true,
+		}
+	}
+	durationMs := time.Since(stats.Start).Milliseconds()
+	avgHeuristic := 0.0
+	if stats.HeuristicCalls > 0 {
+		avgHeuristic = float64(stats.HeuristicTime.Milliseconds()) / float64(stats.HeuristicCalls)
+	}
+	response := analyseResponse{
+		BestMove:        best,
+		DepthUsed:       stats.CompletedDepths,
+		DurationMs:      durationMs,
+		Nodes:           stats.Nodes,
+		HeuristicCalls:  stats.HeuristicCalls,
+		HeuristicTimeMs: stats.HeuristicTime.Milliseconds(),
+		AvgHeuristicMs:  avgHeuristic,
+		BoardGenTimeMs:  stats.BoardGenTime.Milliseconds(),
+		BoardGenOps:     stats.BoardGenOps,
+		TTProbes:        stats.TTProbes,
+		TTHits:          stats.TTHits,
+		TTExactHits:     stats.TTExactHits,
+		TTLowerHits:     stats.TTLowerHits,
+		TTUpperHits:     stats.TTUpperHits,
+		TTStores:        stats.TTStores,
+		TTOverwrites:    stats.TTOverwrites,
+		TTReplacements:  stats.TTReplacements,
+		Cutoffs:         stats.Cutoffs,
+		TTCutoffs:       stats.TTCutoffs,
+		ABCutoffs:       stats.ABCutoffs,
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func historyEntryToDTO(entry HistoryEntry) historyEntryDTO {

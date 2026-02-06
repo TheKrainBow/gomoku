@@ -1,0 +1,16 @@
+gomoku-backend  | [ai:queue] analyzing board 0xab5896a447e7d523 depth [6->10] using threads=8. 0 remains in queue
+gomoku-backend  | [ai:queue] start board 0xab5896a447e7d523 mem alloc=142.45 MB heap_alloc=142.45 MB total_alloc=264.35 MB sys=202.40 MB num_gc=3
+gomoku-backend  | [ai:queue] depth [6/10] complete in 32ms
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [7/10] (elapsed 5000ms, nodes 30546)
+gomoku-backend  | [ai:queue] depth [7/10] complete in 6591ms
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 10000ms, nodes 45600)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 15000ms, nodes 68768)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 20000ms, nodes 93408)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 25000ms, nodes 107424)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 30000ms, nodes 127264)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 35000ms, nodes 143264)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 40000ms, nodes 148192)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 45000ms, nodes 152992)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 50000ms, nodes 159520)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 55000ms, nodes 166816)
+gomoku-backend  | [ai:queue] progress board 0xab5896a447e7d523 depth [8/10] (elapsed 60001ms, nodes 178528)

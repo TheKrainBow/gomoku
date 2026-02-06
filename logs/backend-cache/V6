@@ -1,0 +1,18 @@
+gomoku-backend  | [ai:queue] depth [6/10] complete in 11ms nodes=269 nps=24454 tt_probe=269 tt_hit=62 tt_hit_flag=(e:5 l:57 u:0) cutoffs=240 tt_cutoff=42 ab_cutoff=198
+gomoku-backend  | [ai:queue] depth [7/10] complete in 332ms nodes=1953 nps=5882 tt_probe=1953 tt_hit=278 tt_hit_flag=(e:6 l:144 u:128) cutoffs=1551 tt_cutoff=185 ab_cutoff=1366
+gomoku-backend  | [ai:queue] depth [8/10] complete in 4120ms nodes=66397 nps=16115 tt_probe=66397 tt_hit=13659 tt_hit_flag=(e:596 l:9015 u:4048) cutoffs=50802 tt_cutoff=10637 ab_cutoff=40165
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [9/10] (5000ms, 71141 nodes, 14228 nps, b=7.29, tt=20.3%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [9/10] (10000ms, 93096 nodes, 4391 nps, b=7.41, tt=22.2%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [9/10] (15000ms, 138490 nodes, 9078 nps, b=6.72, tt=23.5%, cutoff=AB)
+gomoku-backend  | [ai:queue] depth [9/10] complete in 12731ms nodes=77739 nps=6106 tt_probe=77739 tt_hit=17679 tt_hit_flag=(e:1400 l:7921 u:8358) cutoffs=54827 tt_cutoff=9864 ab_cutoff=44963
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (20000ms, 153688 nodes, 3039 nps, b=6.90, tt=19.9%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (25000ms, 168600 nodes, 2982 nps, b=6.98, tt=17.4%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (30000ms, 229625 nodes, 12207 nps, b=7.19, tt=23.3%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (35000ms, 329764 nodes, 20027 nps, b=7.01, tt=23.1%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (40000ms, 428670 nodes, 19785 nps, b=6.79, tt=22.6%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (45000ms, 542974 nodes, 22865 nps, b=6.98, tt=21.8%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (50000ms, 624884 nodes, 16382 nps, b=6.72, tt=23.1%, cutoff=AB)
+gomoku-backend  | [ai:queue] hash 0xab5896a447e7d523 [10/10] (55000ms, 681901 nodes, 11405 nps, b=6.55, tt=24.4%, cutoff=AB)
+gomoku-backend  | [ai:queue] depth [10/10] complete in 39833ms nodes=554175 nps=13912 tt_probe=554175 tt_hit=125319 tt_hit_flag=(e:9076 l:74290 u:41953) cutoffs=410885 tt_cutoff=83768 ab_cutoff=327117
+gomoku-backend  | [ai:queue] done board 0xab5896a447e7d523 mem alloc=119.92 MB heap_alloc=119.92 MB total_alloc=262.17 GB sys=216.22 MB num_gc=2845
+gomoku-backend  | [ai:queue] analyzing board 0xab5896a447e7d523 finished in 57029ms depth=[10/10] tt_size=508538

@@ -354,6 +354,15 @@ export default function App() {
 
   return (
     <div className="page" ref={pageRef}>
+      <header className="app-header">
+        <div>
+          <h1>Gomoku</h1>
+          <p>Play on the built-in board, then visit /analyse for detailed stats.</p>
+        </div>
+        <a className="analyse-link" href="/analyse">
+          Analyse board →
+        </a>
+      </header>
       <div className="layout">
         <section className="panel settings-panel">
           <h2>Settings</h2>
