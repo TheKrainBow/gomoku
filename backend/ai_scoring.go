@@ -15,8 +15,8 @@ const (
 	// Keep node-loop instrumentation cheap: sample high-cost timers and emit progress in chunks.
 	searchTimingSampleMask  int64 = 0x3ff // 1/1024
 	searchProgressChunkMask int64 = 0x3f  // 64
-	lmrLateMoveStart              = 5
-	lmrMinDepth                   = 3
+	lmrLateMoveStart              = 4
+	lmrMinDepth                   = 4
 	lmrReduction                  = 1
 	maxSearchBoardCells           = 19 * 19
 )
@@ -750,17 +750,59 @@ func collectCandidateMoves(state GameState, currentPlayer PlayerColor, boardSize
 	return candidates
 }
 
+func hardPlyCandidateCap(config Config, depthFromRoot int) int {
+	switch {
+	case depthFromRoot >= 9:
+		if config.AiMaxCandidatesPly9 > 0 {
+			return config.AiMaxCandidatesPly9
+		}
+		return 8
+	case depthFromRoot == 8:
+		if config.AiMaxCandidatesPly8 > 0 {
+			return config.AiMaxCandidatesPly8
+		}
+		return 12
+	case depthFromRoot == 7:
+		if config.AiMaxCandidatesPly7 > 0 {
+			return config.AiMaxCandidatesPly7
+		}
+		return 16
+	default:
+		if config.AiMaxCandidatesRoot > 0 {
+			return config.AiMaxCandidatesRoot
+		}
+		return 24
+	}
+}
+
+func tacticalKLimit(config Config, depthFromRoot int) int {
+	if depthFromRoot == 0 && config.AiKTactRoot > 0 {
+		return config.AiKTactRoot
+	}
+	if depthFromRoot <= 2 && config.AiKTactMid > 0 {
+		return config.AiKTactMid
+	}
+	if config.AiKTactDeep > 0 {
+		return config.AiKTactDeep
+	}
+	return 0
+}
+
 func candidateLimit(ctx minimaxContext, depthLeft, depthFromRoot int, tactical bool) int {
 	config := ctx.settings.Config
+	if config.AiEnableHardPlyCaps {
+		limit := hardPlyCandidateCap(config, depthFromRoot)
+		if config.AiEnableTacticalK && tactical {
+			if tacticalLimit := tacticalKLimit(config, depthFromRoot); tacticalLimit > 0 && tacticalLimit < limit {
+				limit = tacticalLimit
+			}
+		}
+		return limit
+	}
+
 	limit := 0
 	if config.AiEnableTacticalK && tactical {
-		if depthFromRoot == 0 && config.AiKTactRoot > 0 {
-			limit = config.AiKTactRoot
-		} else if depthFromRoot <= 2 && config.AiKTactMid > 0 {
-			limit = config.AiKTactMid
-		} else if config.AiKTactDeep > 0 {
-			limit = config.AiKTactDeep
-		}
+		limit = tacticalKLimit(config, depthFromRoot)
 	} else if !config.AiEnableDynamicTopK {
 		limit = config.AiTopCandidates
 	} else if config.AiEnableTacticalK {
@@ -795,6 +837,17 @@ func candidateLimit(ctx minimaxContext, depthLeft, depthFromRoot int, tactical b
 		}
 	}
 	return limit
+}
+
+func defensiveTacticalCandidates(candidates []candidateMove) []candidateMove {
+	filtered := make([]candidateMove, 0, len(candidates))
+	for _, cand := range candidates {
+		switch cand.priority {
+		case prioWin, prioBlockWin, prioBlockFour:
+			filtered = append(filtered, cand)
+		}
+	}
+	return filtered
 }
 
 func applyCandidateCap(candidates []Move, limit int) []Move {
@@ -1733,6 +1786,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	var immediateWins []Move
 	mustBlock := false
 	tactical := false
+	opponentUrgent := false
 	if checkForcedLines {
 		immediateWins = findImmediateWinMovesCached(cache, *state, ctx.rules, currentPlayer, ctx.settings.BoardSize, ctx.settings.Config)
 		if len(immediateWins) == 0 {
@@ -1743,6 +1797,8 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 		}
 	} else if ctx.settings.Config.AiEnableTacticalK || ctx.settings.Config.AiEnableTacticalMode {
 		tactical = hasUrgentThreat(state.Board, ctx.settings.BoardSize, currentPlayer)
+		opponentUrgent = hasUrgentThreat(state.Board, ctx.settings.BoardSize, otherPlayer(currentPlayer))
+		tactical = tactical || opponentUrgent
 	}
 	maxCandidates := candidateLimit(ctx, depth, depthFromRoot, tactical)
 	var truncatedCandidates []Move
@@ -1754,7 +1810,19 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 		candidates = orderMovesFromList(*state, ctx, currentPlayer, maximizing, depthFromRoot, blockMoves, pvMove, prioBlockWin)
 	} else if ctx.settings.Config.AiEnableTacticalMode && tactical {
 		tacticalMoves := tacticalCandidates(*state, ctx, currentPlayer)
-		if len(tacticalMoves) > 0 {
+		if opponentUrgent {
+			defensiveMoves := defensiveTacticalCandidates(tacticalMoves)
+			if len(defensiveMoves) > 0 {
+				candidates = orderCandidateMoves(*state, ctx, currentPlayer, maximizing, depthFromRoot, defensiveMoves, 0, pvMove)
+			} else {
+				blockMoves := findBlockingMoves(cache, *state, ctx.rules, currentPlayer, ctx.settings.BoardSize, ctx.settings.Config)
+				if len(blockMoves) > 0 {
+					candidates = orderMovesFromList(*state, ctx, currentPlayer, maximizing, depthFromRoot, blockMoves, pvMove, prioBlockWin)
+				} else {
+					candidates = orderCandidates(*state, ctx, currentPlayer, maximizing, depthFromRoot, maxCandidates, pvMove)
+				}
+			}
+		} else if len(tacticalMoves) > 0 {
 			candidates = orderCandidateMoves(*state, ctx, currentPlayer, maximizing, depthFromRoot, tacticalMoves, 0, pvMove)
 		} else {
 			candidates = orderCandidates(*state, ctx, currentPlayer, maximizing, depthFromRoot, maxCandidates, pvMove)
@@ -1999,8 +2067,10 @@ func scoreBoardAtDepth(state GameState, settings AIScoreSettings, ctx minimaxCon
 		mustBlock = hasImmediateWinCached(cache, state, ctx.rules, otherPlayer(settings.Player), settings.BoardSize, settings.Config)
 	}
 	tactical := false
+	opponentUrgent := false
 	if settings.Config.AiEnableTacticalK || settings.Config.AiEnableTacticalMode || settings.Config.AiEnableTacticalExt {
-		tactical = isTacticalPosition(state, ctx, settings.Player)
+		opponentUrgent = hasUrgentThreat(state.Board, settings.BoardSize, otherPlayer(settings.Player))
+		tactical = isTacticalPosition(state, ctx, settings.Player) || opponentUrgent
 	}
 	maxCandidates := candidateLimit(ctx, depth, 0, tactical)
 	var truncatedCandidates []Move
@@ -2013,7 +2083,19 @@ func scoreBoardAtDepth(state GameState, settings AIScoreSettings, ctx minimaxCon
 		candidates = orderMovesFromList(state, ctx, settings.Player, rootMaximizing, 0, blockMoves, pvMove, prioBlockWin)
 	} else if settings.Config.AiEnableTacticalMode && tactical {
 		tacticalMoves := tacticalCandidates(state, ctx, settings.Player)
-		if len(tacticalMoves) > 0 {
+		if opponentUrgent {
+			defensiveMoves := defensiveTacticalCandidates(tacticalMoves)
+			if len(defensiveMoves) > 0 {
+				candidates = orderCandidateMoves(state, ctx, settings.Player, rootMaximizing, 0, defensiveMoves, 0, pvMove)
+			} else {
+				blockMoves := findBlockingMoves(cache, state, ctx.rules, settings.Player, settings.BoardSize, settings.Config)
+				if len(blockMoves) > 0 {
+					candidates = orderMovesFromList(state, ctx, settings.Player, rootMaximizing, 0, blockMoves, pvMove, prioBlockWin)
+				} else {
+					candidates = orderCandidates(state, ctx, settings.Player, rootMaximizing, 0, maxCandidates, pvMove)
+				}
+			}
+		} else if len(tacticalMoves) > 0 {
 			candidates = orderCandidateMoves(state, ctx, settings.Player, rootMaximizing, 0, tacticalMoves, 0, pvMove)
 		} else {
 			candidates = orderCandidates(state, ctx, settings.Player, rootMaximizing, 0, maxCandidates, pvMove)
@@ -2267,8 +2349,10 @@ func ScoreBoardDirectDepthParallel(state GameState, rules Rules, settings AIScor
 		mustBlock = hasImmediateWinCached(cache, state, rules, otherPlayer(settings.Player), settings.BoardSize, settings.Config)
 	}
 	tactical := false
+	opponentUrgent := false
 	if settings.Config.AiEnableTacticalK || settings.Config.AiEnableTacticalMode || settings.Config.AiEnableTacticalExt {
-		tactical = isTacticalPosition(state, baseCtx, settings.Player)
+		opponentUrgent = hasUrgentThreat(state.Board, settings.BoardSize, otherPlayer(settings.Player))
+		tactical = isTacticalPosition(state, baseCtx, settings.Player) || opponentUrgent
 	}
 	maxCandidates := candidateLimit(baseCtx, settings.Depth, 0, tactical)
 	rootMaximizing := settings.Player == PlayerBlack
@@ -2280,7 +2364,19 @@ func ScoreBoardDirectDepthParallel(state GameState, rules Rules, settings AIScor
 		candidates = orderMovesFromList(state, baseCtx, settings.Player, rootMaximizing, 0, blockMoves, pvMove, prioBlockWin)
 	} else if settings.Config.AiEnableTacticalMode && tactical {
 		tacticalMoves := tacticalCandidates(state, baseCtx, settings.Player)
-		if len(tacticalMoves) > 0 {
+		if opponentUrgent {
+			defensiveMoves := defensiveTacticalCandidates(tacticalMoves)
+			if len(defensiveMoves) > 0 {
+				candidates = orderCandidateMoves(state, baseCtx, settings.Player, rootMaximizing, 0, defensiveMoves, 0, pvMove)
+			} else {
+				blockMoves := findBlockingMoves(cache, state, rules, settings.Player, settings.BoardSize, settings.Config)
+				if len(blockMoves) > 0 {
+					candidates = orderMovesFromList(state, baseCtx, settings.Player, rootMaximizing, 0, blockMoves, pvMove, prioBlockWin)
+				} else {
+					candidates = orderCandidates(state, baseCtx, settings.Player, rootMaximizing, 0, maxCandidates, pvMove)
+				}
+			}
+		} else if len(tacticalMoves) > 0 {
 			candidates = orderCandidateMoves(state, baseCtx, settings.Player, rootMaximizing, 0, tacticalMoves, 0, pvMove)
 		} else {
 			candidates = orderCandidates(state, baseCtx, settings.Player, rootMaximizing, 0, maxCandidates, pvMove)
@@ -2479,6 +2575,14 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 	}
 	if state.Hash == 0 {
 		state.recomputeHashes()
+	}
+	queueState := GameState{}
+	queueStateReady := false
+	if settings.Config.AiQueueEnabled && !settings.SkipQueueBacklog && !settings.DirectDepthOnly {
+		// Keep an immutable pre-search snapshot so queue learning always targets
+		// the exact board before this AI decision.
+		queueState = state.Clone()
+		queueStateReady = true
 	}
 	if settings.Config.AiMaxDepth > 0 {
 		settings.Depth = settings.Config.AiMaxDepth
@@ -2701,7 +2805,9 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 	logAITask(ctx, 0, "ScoreBoard finished depth=%d total=%dms", lastDepthCompleted, totalDuration.Milliseconds())
 	if !settings.DirectDepthOnly && lastDepthCompleted < settings.Depth {
 		if timedOut(ctx) || (ctx.settings.ShouldStop != nil && ctx.settings.ShouldStop()) {
-			enqueueSearchBacklogTask(state, rules)
+			if queueStateReady {
+				enqueueSearchBacklogTask(queueState, rules)
+			}
 		}
 	}
 	if lastScores != nil {

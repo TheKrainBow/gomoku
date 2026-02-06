@@ -254,38 +254,49 @@ func TestScoreBoardDirectDepthParallelReportsProgressAtDepthOne(t *testing.T) {
 
 func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.AiEnableDynamicTopK = false
-	cfg.AiTopCandidates = 30
-	cfg.AiMaxCandidatesPly7 = 14
-	cfg.AiMaxCandidatesPly8 = 11
-	cfg.AiMaxCandidatesPly9 = 9
+	cfg.AiEnableHardPlyCaps = true
+	cfg.AiMaxCandidatesRoot = 24
+	cfg.AiMaxCandidatesPly7 = 16
+	cfg.AiMaxCandidatesPly8 = 12
+	cfg.AiMaxCandidatesPly9 = 8
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
-	if got := candidateLimit(ctx, 10, 6, false); got != 30 {
-		t.Fatalf("expected base limit before ply cap, got %d", got)
+	if got := candidateLimit(ctx, 10, 6, false); got != 24 {
+		t.Fatalf("expected hard cap for ply <= 6, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 7, false); got != 14 {
+	if got := candidateLimit(ctx, 10, 7, false); got != 16 {
 		t.Fatalf("expected ply-7 cap to apply, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 8, false); got != 11 {
+	if got := candidateLimit(ctx, 10, 8, false); got != 12 {
 		t.Fatalf("expected ply-8 cap to apply, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 9, false); got != 9 {
+	if got := candidateLimit(ctx, 10, 9, false); got != 8 {
 		t.Fatalf("expected ply-9 cap to apply, got %d", got)
 	}
 }
 
-func TestCandidateLimitKeepsSmallerBaseLimit(t *testing.T) {
+func TestCandidateLimitAllowsTacticalLimitToTightenHardCap(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.AiEnableHardPlyCaps = true
+	cfg.AiEnableTacticalK = true
+	cfg.AiMaxCandidatesPly9 = 8
+	cfg.AiKTactDeep = 6
+	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
+
+	if got := candidateLimit(ctx, 10, 9, true); got != 6 {
+		t.Fatalf("expected tactical limit to tighten hard cap, got %d", got)
+	}
+}
+
+func TestCandidateLimitKeepsLegacyPathWhenHardCapsDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AiEnableHardPlyCaps = false
 	cfg.AiEnableDynamicTopK = false
 	cfg.AiTopCandidates = 6
-	cfg.AiMaxCandidatesPly7 = 14
-	cfg.AiMaxCandidatesPly8 = 11
-	cfg.AiMaxCandidatesPly9 = 9
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
 	if got := candidateLimit(ctx, 10, 9, false); got != 6 {
-		t.Fatalf("expected smaller base limit to be preserved, got %d", got)
+		t.Fatalf("expected legacy candidate limit when hard caps disabled, got %d", got)
 	}
 }
 
@@ -296,10 +307,10 @@ func TestShouldApplyLMR(t *testing.T) {
 	if shouldApplyLMR(2, 6, true) {
 		t.Fatalf("expected no LMR below minimum depth")
 	}
-	if shouldApplyLMR(4, 4, true) {
+	if shouldApplyLMR(4, 3, true) {
 		t.Fatalf("expected no LMR before late-move threshold")
 	}
-	if !shouldApplyLMR(4, 5, true) {
+	if !shouldApplyLMR(4, 4, true) {
 		t.Fatalf("expected LMR on quiet late moves")
 	}
 }

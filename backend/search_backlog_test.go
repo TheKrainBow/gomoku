@@ -111,3 +111,74 @@ func TestBacklogConfigKeepsKillerHistorySettings(t *testing.T) {
 		t.Fatalf("expected history setting to be preserved")
 	}
 }
+
+func TestBacklogNeedsAnalysisWhenNoTTEntry(t *testing.T) {
+	cfg := backlogConfig(DefaultConfig())
+	settings := DefaultGameSettings()
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.recomputeHashes()
+	cache := newAISearchCache()
+
+	needs, target, solved := backlogNeedsAnalysis(state, cfg, &cache)
+	if !needs {
+		t.Fatalf("expected analysis to be needed without TT entry")
+	}
+	if target <= 0 {
+		t.Fatalf("expected positive target depth, got %d", target)
+	}
+	if solved != 0 {
+		t.Fatalf("expected solved depth 0 without TT entry, got %d", solved)
+	}
+}
+
+func TestBacklogNeedsAnalysisSkipsWhenExactEntryMeetsTarget(t *testing.T) {
+	cfg := backlogConfig(DefaultConfig())
+	settings := DefaultGameSettings()
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.recomputeHashes()
+	cache := newAISearchCache()
+	tt := ensureTT(&cache, cfg)
+	if tt == nil {
+		t.Fatalf("expected TT to be initialized")
+	}
+	_, target := backlogDepthRange(cfg)
+	key := ttKeyFor(state, state.Board.Size())
+	tt.Store(key, target, 42, TTExact, Move{X: 0, Y: 0})
+
+	needs, gotTarget, solved := backlogNeedsAnalysis(state, cfg, &cache)
+	if needs {
+		t.Fatalf("expected analysis to be skipped for exact depth>=target entry")
+	}
+	if gotTarget != target {
+		t.Fatalf("expected target depth %d, got %d", target, gotTarget)
+	}
+	if solved < target {
+		t.Fatalf("expected solved depth >= target depth, got solved=%d target=%d", solved, target)
+	}
+}
+
+func TestBacklogNeedsAnalysisDoesNotSkipNonExactEntry(t *testing.T) {
+	cfg := backlogConfig(DefaultConfig())
+	settings := DefaultGameSettings()
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.recomputeHashes()
+	cache := newAISearchCache()
+	tt := ensureTT(&cache, cfg)
+	if tt == nil {
+		t.Fatalf("expected TT to be initialized")
+	}
+	_, target := backlogDepthRange(cfg)
+	key := ttKeyFor(state, state.Board.Size())
+	tt.Store(key, target+2, 42, TTLower, Move{X: 0, Y: 0})
+
+	needs, _, solved := backlogNeedsAnalysis(state, cfg, &cache)
+	if !needs {
+		t.Fatalf("expected non-exact entry to still require analysis")
+	}
+	if solved != 0 {
+		t.Fatalf("expected solved depth 0 for non-exact entry, got %d", solved)
+	}
+}

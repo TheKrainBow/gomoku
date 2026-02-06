@@ -31,11 +31,16 @@ func newSearchBacklog() *searchBacklog {
 }
 
 func enqueueSearchBacklogTask(state GameState, rules Rules) {
-	if !GetConfig().AiQueueEnabled {
+	config := GetConfig()
+	if !config.AiQueueEnabled {
 		return
 	}
+	config = backlogConfig(config)
 	if state.Hash == 0 {
 		state.recomputeHashes()
+	}
+	if needs, _, _ := backlogNeedsAnalysis(state, config, SharedSearchCache()); !needs {
+		return
 	}
 	task := backlogTask{state: state.Clone(), rules: rules, created: time.Now()}
 	searchBacklogManager.enqueue(task, false)
@@ -191,6 +196,23 @@ func backlogDepthRange(config Config) (int, int) {
 	return start, target
 }
 
+func backlogNeedsAnalysis(state GameState, config Config, cache *AISearchCache) (needs bool, targetDepth int, solvedDepth int) {
+	_, targetDepth = backlogDepthRange(config)
+	if state.Hash == 0 {
+		state.recomputeHashes()
+	}
+	tt := ensureTT(cache, config)
+	if tt == nil {
+		return true, targetDepth, 0
+	}
+	key := ttKeyFor(state, state.Board.Size())
+	entry, ok := tt.Probe(key)
+	if !ok || entry.Flag != TTExact || entry.Depth < targetDepth {
+		return true, targetDepth, 0
+	}
+	return false, targetDepth, entry.Depth
+}
+
 func (b *searchBacklog) startWorkers(controller *GameController, count int) {
 	if count <= 0 {
 		count = 1
@@ -236,6 +258,11 @@ func (b *searchBacklog) processTask(task backlogTask) {
 	startDepth, targetDepth := backlogDepthRange(config)
 	stats := &SearchStats{Start: time.Now()}
 	cache := SharedSearchCache()
+	boardHash := ttKeyFor(task.state, task.state.Board.Size())
+	if needs, _, solvedDepth := backlogNeedsAnalysis(task.state, config, cache); !needs {
+		fmt.Printf("[ai:queue] skip board 0x%x (already solved depth=%d target=%d)\n", boardHash, solvedDepth, targetDepth)
+		return
+	}
 	analyzeThreads := backlogAnalyzeThreadCount(config, runtime.NumCPU())
 	rootCandidates := collectCandidateMoves(task.state, task.state.ToMove, task.state.Board.Size())
 	effectiveThreads := analyzeThreads
@@ -288,7 +315,6 @@ func (b *searchBacklog) processTask(task backlogTask) {
 		}
 	}
 	remaining := b.Len()
-	boardHash := ttKeyFor(task.state, task.state.Board.Size())
 	fmt.Printf("[ai:queue] analyzing board 0x%x depth [%d->%d] using threads=%d. %d remains in queue\n",
 		boardHash, startDepth, targetDepth, effectiveThreads, remaining)
 	logMemUsage(fmt.Sprintf("start board 0x%x", boardHash))
