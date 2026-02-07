@@ -5,7 +5,7 @@ services:
     container_name: gomoku-backend
     restart: unless-stopped
     volumes:
-      - ./logs/backend-cache:/cache_logs
+      - backend_cache:/cache_logs
     networks:
       - gomoku-net
 
@@ -42,3 +42,9 @@ networks:
 
 volumes:
   frontend_node_modules:
+  backend_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs/backend-cache

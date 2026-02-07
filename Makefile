@@ -1,4 +1,7 @@
 LAUNCHER := ./gomoku
+TRAINER_IMAGE := gomoku-ai-trainer
+TRAINER_CONTAINER := gomoku-ai-trainer
+TRAINER_BACKEND_URL ?= http://host.docker.internal:8080
 
 all: $(LAUNCHER)
 
@@ -35,4 +38,25 @@ fclean:
 	fi
 	@rm -f $(LAUNCHER)
 
-.PHONY: all stop re clean fclean
+trainer-build:
+	@docker build -t $(TRAINER_IMAGE) ./ai-trainer
+
+trainer-start: trainer-build
+	@mkdir -p ./logs
+	@docker rm -f $(TRAINER_CONTAINER) >/dev/null 2>&1 || true
+	@docker run -d --name $(TRAINER_CONTAINER) \
+		--add-host host.docker.internal:host-gateway \
+		-e BACKEND_URL=$(TRAINER_BACKEND_URL) \
+		-v "$(PWD)/logs:/logs" \
+		$(TRAINER_IMAGE)
+
+trainer-stop:
+	@docker rm -f $(TRAINER_CONTAINER) >/dev/null 2>&1 || true
+
+trainer-logs:
+	@docker logs -f $(TRAINER_CONTAINER)
+
+trainer-status:
+	@docker ps -a --filter "name=$(TRAINER_CONTAINER)"
+
+.PHONY: all stop re clean fclean trainer-build trainer-start trainer-stop trainer-logs trainer-status

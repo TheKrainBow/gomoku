@@ -15,7 +15,15 @@ type ghostCell struct {
 }
 
 type ghostPayload struct {
-	Positions []ghostCell `json:"positions"`
+	Mode       string      `json:"mode,omitempty"`
+	Positions  []ghostCell `json:"positions,omitempty"`
+	Best       *ghostCell  `json:"best,omitempty"`
+	Depth      int         `json:"depth,omitempty"`
+	Score      float64     `json:"score,omitempty"`
+	NextPlayer int         `json:"next_player,omitempty"`
+	HistoryLen int         `json:"history_len,omitempty"`
+	Active     bool        `json:"active"`
+	Final      bool        `json:"final,omitempty"`
 }
 
 type GhostClient struct {
@@ -62,6 +70,13 @@ func (h *GhostHub) Register(c *GhostClient) {
 	h.mu.Unlock()
 }
 
+func (h *GhostHub) Publish(payload ghostPayload) {
+	select {
+	case h.broadcast <- payload:
+	default:
+	}
+}
+
 func (h *GhostHub) Unregister(c *GhostClient) {
 	h.mu.Lock()
 	if _, ok := h.clients[c]; ok {
@@ -99,10 +114,8 @@ func serveGhostWS(hub *GhostHub, w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer conn.Close()
-		for msg := range client.send {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
+		if err := writeWSWithHeartbeat(conn, client.send); err != nil {
+			return
 		}
 	}()
 

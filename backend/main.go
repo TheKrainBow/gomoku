@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,13 +18,18 @@ import (
 )
 
 type StatusResponse struct {
-	Settings   GameSettingsDTO   `json:"settings"`
-	Config     Config            `json:"config"`
-	NextPlayer int               `json:"next_player"`
-	Winner     int               `json:"winner"`
-	BoardSize  int               `json:"board_size"`
-	Status     string            `json:"status"`
-	History    []historyEntryDTO `json:"history"`
+	Settings           GameSettingsDTO   `json:"settings"`
+	Config             Config            `json:"config"`
+	NextPlayer         int               `json:"next_player"`
+	Winner             int               `json:"winner"`
+	BoardSize          int               `json:"board_size"`
+	Status             string            `json:"status"`
+	History            []historyEntryDTO `json:"history"`
+	WinReason          string            `json:"win_reason"`
+	WinningLine        []Move            `json:"winning_line"`
+	WinningCapturePair []Move            `json:"winning_capture_pair"`
+	CaptureWinStones   int               `json:"capture_win_stones"`
+	TurnStartedAtMs    int64             `json:"turn_started_at_ms"`
 }
 
 type GameSettingsDTO struct {
@@ -54,11 +64,16 @@ type historyPayload struct {
 }
 
 type resetPayload struct {
-	History    []historyEntryDTO `json:"history"`
-	NextPlayer int               `json:"next_player"`
-	Winner     int               `json:"winner"`
-	Status     string            `json:"status"`
-	BoardSize  int               `json:"board_size"`
+	History            []historyEntryDTO `json:"history"`
+	NextPlayer         int               `json:"next_player"`
+	Winner             int               `json:"winner"`
+	Status             string            `json:"status"`
+	BoardSize          int               `json:"board_size"`
+	WinReason          string            `json:"win_reason"`
+	WinningLine        []Move            `json:"winning_line"`
+	WinningCapturePair []Move            `json:"winning_capture_pair"`
+	CaptureWinStones   int               `json:"capture_win_stones"`
+	TurnStartedAtMs    int64             `json:"turn_started_at_ms"`
 }
 
 type cellChange struct {
@@ -110,24 +125,49 @@ type analyseRequest struct {
 	UseTempCache bool    `json:"use_temp_cache"`
 }
 
+type ttCacheStatusResponse struct {
+	Count    int     `json:"count"`
+	Capacity int     `json:"capacity"`
+	Usage    float64 `json:"usage"`
+	Full     bool    `json:"full"`
+}
+
 func main() {
+	var persistOnce sync.Once
+	persistOnShutdown := func(reason string) {
+		persistOnce.Do(func() {
+			log.Printf("[backend] persisting caches on %s", reason)
+			persistCaches()
+		})
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("[backend] panic recovered in main: %v", recovered)
+			persistOnShutdown("panic")
+		}
+	}()
+
 	controller := NewGameController(DefaultGameSettings())
-	startSearchBacklogWorker(controller)
+	loadPersistedCaches()
+	defer persistOnShutdown("exit")
 	hub := NewHub()
 	ghostHub := NewGhostHub()
+	analiticsHub := NewAnaliticsHub()
+	searchBacklogManager.SetAnaliticsHub(analiticsHub)
+	startSearchBacklogWorker(controller)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	controller.SetGhostPublisher(
 		func() bool { return ghostHub.HasClients() && GetConfig().GhostMode },
-		func(board Board) {
-			positions := ghostPositionsFromBoard(board)
-			ghostHub.broadcast <- ghostPayload{Positions: positions}
+		func(payload ghostPayload) {
+			ghostHub.Publish(payload)
 		},
 	)
 
 	go hub.Run(ctx.Done())
 	go ghostHub.Run(ctx.Done())
+	go analiticsHub.Run(ctx.Done())
 	go func() {
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
@@ -140,6 +180,7 @@ func main() {
 					if entry, ok := controller.LatestHistoryEntry(); ok {
 						hub.broadcastHistory <- historyPayload{History: []historyEntryDTO{historyEntryToDTO(entry)}}
 					}
+					hub.broadcastStatus <- controllerStatus(controller)
 				}
 			}
 		}
@@ -222,11 +263,21 @@ func main() {
 		if entry, ok := controller.LatestHistoryEntry(); ok {
 			hub.broadcastHistory <- historyPayload{History: []historyEntryDTO{historyEntryToDTO(entry)}}
 		}
+		hub.broadcastStatus <- controllerStatus(controller)
 		writeJSON(w, http.StatusOK, controllerStatus(controller))
 	})
 
 	r.Post("/api/analyse", func(w http.ResponseWriter, r *http.Request) {
 		handleAnalyseRequest(w, r)
+	})
+	r.Get("/api/analitics/queue", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, analiticsQueueResponse{
+			Queue:        searchBacklogManager.TopAnaliticsQueue(analiticsTopBoardsLimit()),
+			TotalInQueue: searchBacklogManager.TotalAnaliticsQueue(),
+		})
+	})
+	r.Get("/api/cache/tt", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, ttCacheStatus())
 	})
 
 	r.Get("/ws/", func(w http.ResponseWriter, r *http.Request) {
@@ -235,11 +286,51 @@ func main() {
 	r.Get("/ws/ghost", func(w http.ResponseWriter, r *http.Request) {
 		serveGhostWS(ghostHub, w, r)
 	})
+	r.Get("/ws/analitics", func(w http.ResponseWriter, r *http.Request) {
+		serveAnaliticsWS(analiticsHub, w, r)
+	})
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+	serverErrCh := make(chan error, 1)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrCh <- err
+		}
+		close(serverErrCh)
+	}()
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	log.Println("backend listening on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		persistCaches()
-		log.Fatal(err)
+	var runErr error
+	select {
+	case <-sigCtx.Done():
+		log.Printf("[backend] shutdown signal received: %v", sigCtx.Err())
+	case err, ok := <-serverErrCh:
+		if ok {
+			runErr = err
+			log.Printf("[backend] server error: %v", err)
+		}
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("[backend] graceful shutdown failed: %v", err)
+		if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			log.Printf("[backend] forced close failed: %v", closeErr)
+		}
+	}
+
+	cancel()
+	searchBacklogManager.RequestStop()
+	persistOnShutdown("shutdown")
+	if runErr != nil {
+		log.Printf("[backend] exiting after server error: %v", runErr)
 	}
 }
 
@@ -257,10 +348,8 @@ func serveWS(hub *Hub, controller *GameController, w http.ResponseWriter, r *htt
 
 	go func() {
 		defer conn.Close()
-		for msg := range client.send {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
+		if err := writeWSWithHeartbeat(conn, client.send); err != nil {
+			return
 		}
 	}()
 
@@ -285,15 +374,31 @@ func serveWS(hub *Hub, controller *GameController, w http.ResponseWriter, r *htt
 func controllerStatus(controller *GameController) StatusResponse {
 	state := controller.State()
 	settings := controllerSettingsDTO(controller.Settings())
+	gameSettings := controller.Settings()
 	return StatusResponse{
-		Settings:   settings,
-		Config:     GetConfig(),
-		NextPlayer: playerToInt(state.ToMove),
-		Winner:     winnerFromStatus(state.Status),
-		BoardSize:  state.Board.Size(),
-		Status:     statusToString(state.Status),
-		History:    historyToDTO(controller.History()),
+		Settings:           settings,
+		Config:             GetConfig(),
+		NextPlayer:         playerToInt(state.ToMove),
+		Winner:             winnerFromStatus(state.Status),
+		BoardSize:          state.Board.Size(),
+		Status:             statusToString(state.Status),
+		History:            historyToDTO(controller.History()),
+		WinReason:          winReasonFromState(state),
+		WinningLine:        append([]Move(nil), state.WinningLine...),
+		WinningCapturePair: append([]Move(nil), state.WinningCapturePair...),
+		CaptureWinStones:   gameSettings.CaptureWinStones,
+		TurnStartedAtMs:    controller.CurrentTurnStartedAtMs(),
 	}
+}
+
+func winReasonFromState(state GameState) string {
+	if winnerFromStatus(state.Status) == 0 {
+		return ""
+	}
+	if len(state.WinningLine) > 0 {
+		return "alignment"
+	}
+	return "capture"
 }
 
 func settingsFromDTO(dto GameSettingsDTO, base GameSettings) GameSettings {
@@ -473,6 +578,7 @@ func handleAnalyseRequest(w http.ResponseWriter, r *http.Request) {
 	state.ForcedCaptureMoves = nil
 	state.LastMessage = ""
 	state.WinningLine = nil
+	state.WinningCapturePair = nil
 	state.recomputeHashes()
 
 	rules := NewRules(settings)
@@ -546,6 +652,29 @@ func handleAnalyseRequest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func ttCacheStatus() ttCacheStatusResponse {
+	config := GetConfig()
+	cache := SharedSearchCache()
+	tt := ensureTT(cache, config)
+	if tt == nil {
+		return ttCacheStatusResponse{}
+	}
+	count := tt.Count()
+	capacity := tt.Capacity()
+	usage := 0.0
+	full := false
+	if capacity > 0 {
+		usage = float64(count) / float64(capacity)
+		full = count >= capacity
+	}
+	return ttCacheStatusResponse{
+		Count:    count,
+		Capacity: capacity,
+		Usage:    usage,
+		Full:     full,
+	}
+}
+
 func historyEntryToDTO(entry HistoryEntry) historyEntryDTO {
 	return historyEntryDTO{
 		X:                 entry.Move.X,
@@ -578,12 +707,18 @@ func changesFromEntry(entry HistoryEntry) []cellChange {
 
 func resetFromController(controller *GameController) resetPayload {
 	state := controller.State()
+	settings := controller.Settings()
 	return resetPayload{
-		History:    historyToDTO(controller.History()),
-		NextPlayer: playerToInt(state.ToMove),
-		Winner:     winnerFromStatus(state.Status),
-		Status:     statusToString(state.Status),
-		BoardSize:  state.Board.Size(),
+		History:            historyToDTO(controller.History()),
+		NextPlayer:         playerToInt(state.ToMove),
+		Winner:             winnerFromStatus(state.Status),
+		Status:             statusToString(state.Status),
+		BoardSize:          state.Board.Size(),
+		WinReason:          winReasonFromState(state),
+		WinningLine:        append([]Move(nil), state.WinningLine...),
+		WinningCapturePair: append([]Move(nil), state.WinningCapturePair...),
+		CaptureWinStones:   settings.CaptureWinStones,
+		TurnStartedAtMs:    controller.CurrentTurnStartedAtMs(),
 	}
 }
 

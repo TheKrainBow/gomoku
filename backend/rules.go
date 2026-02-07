@@ -209,6 +209,40 @@ func (r Rules) FindAlignmentBreakCaptures(afterMoveState GameState, opponent Pla
 	return moves
 }
 
+func (r Rules) FindImmediateCaptureWinMove(state GameState, attacker PlayerColor, attackerCaptured int) (Move, []Move, bool) {
+	if attackerCaptured+2 < r.settings.CaptureWinStones {
+		return Move{}, nil, false
+	}
+	probeState := state.Clone()
+	probeState.ToMove = attacker
+	probeState.MustCapture = false
+	probeState.ForcedCaptureMoves = nil
+	attackerCell := CellFromPlayer(attacker)
+	size := state.Board.Size()
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			if !state.Board.IsEmpty(x, y) {
+				continue
+			}
+			move := Move{X: x, Y: y}
+			if ok, _ := r.IsLegal(probeState, move, attacker); !ok {
+				continue
+			}
+			boardCopy := state.Board.Clone()
+			boardCopy.Set(x, y, attackerCell)
+			captures := r.FindCaptures(boardCopy, move, attackerCell)
+			if len(captures) < 2 {
+				continue
+			}
+			if attackerCaptured+len(captures) < r.settings.CaptureWinStones {
+				continue
+			}
+			return move, append([]Move(nil), captures...), true
+		}
+	}
+	return Move{}, nil, false
+}
+
 func (r Rules) FindAlignmentLine(board Board, lastMove Move) ([]Move, bool) {
 	line := []Move{}
 	if !lastMove.IsValid(r.settings.BoardSize) {

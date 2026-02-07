@@ -38,6 +38,10 @@ type Config struct {
 	AiTtSize              int             `json:"ai_tt_size"`
 	AiTtBuckets           int             `json:"ai_tt_buckets"`
 	AiTtUseSetAssoc       bool            `json:"ai_tt_use_set_assoc"`
+	AiEnableTtPersistence bool            `json:"ai_enable_tt_persistence"`
+	AiTtPersistencePath   string          `json:"ai_tt_persistence_path"`
+	AiEnableRootTranspose bool            `json:"ai_enable_root_transpose_tt"`
+	AiRootTransposeSize   int             `json:"ai_root_transpose_tt_size"`
 	AiLogSearchStats      bool            `json:"ai_log_search_stats"`
 	AiMinmaxCacheLimit    int             `json:"ai_minmax_cache_limit"`
 	AiEnableKillerMoves   bool            `json:"ai_enable_killer_moves"`
@@ -59,6 +63,7 @@ type Config struct {
 	AiQueueWorkers        int             `json:"ai_queue_workers"`
 	AiQueueAnalyzeThreads int             `json:"ai_queue_analyze_threads"`
 	AiQueueEnabled        bool            `json:"ai_enable_queue"`
+	AiAnaliticsTopBoards  int             `json:"ai_analitics_top_boards"`
 	Heuristics            HeuristicConfig `json:"heuristics"`
 }
 
@@ -79,6 +84,7 @@ type ConfigStore struct {
 	mu     sync.RWMutex
 	config Config
 }
+
 func DefaultConfig() Config {
 	return Config{
 		GhostMode:      false,
@@ -154,12 +160,17 @@ func DefaultConfig() Config {
 		AiQueueWorkers:        1,
 		AiQueueAnalyzeThreads: 0,
 		AiQueueEnabled:        true,
+		AiAnaliticsTopBoards:  7,
 
 		// TT: slightly larger than 1<<18 helps a lot once you deepen regularly
-		AiTtUseSetAssoc: true,
-		AiTtBuckets:     4,
-		AiTtSize:        1 << 19, // 524288
-		AiTtMaxEntries:  0,
+		AiTtUseSetAssoc:       true,
+		AiTtBuckets:           4,
+		AiTtSize:              1 << 19, // 524288
+		AiTtMaxEntries:        0,
+		AiEnableTtPersistence: true,
+		AiTtPersistencePath:   "tt_cache.gob",
+		AiEnableRootTranspose: true,
+		AiRootTransposeSize:   1 << 16, // 65536
 
 		// Move ordering helpers
 		AiEnableKillerMoves:  true,
@@ -181,8 +192,8 @@ func DefaultConfig() Config {
 			Closed4:      15000.0,
 			Broken4:      12000.0,
 			Open3:        2500.0,
-			Broken3:      1200.0,
-			Closed3:      400.0,
+			Broken3:      2500.0,
+			Closed3:      300.0,
 			Open2:        200.0,
 			Broken2:      120.0,
 			ForkOpen3:    6000.0,

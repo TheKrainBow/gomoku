@@ -10,6 +10,7 @@ type Hub struct {
 	clients           map[*Client]struct{}
 	broadcastBoard    chan boardPayload
 	broadcastHistory  chan historyPayload
+	broadcastStatus   chan StatusResponse
 	broadcastReset    chan resetPayload
 	broadcastSettings chan settingsPayload
 }
@@ -39,6 +40,7 @@ func NewHub() *Hub {
 		clients:           make(map[*Client]struct{}),
 		broadcastBoard:    make(chan boardPayload, 16),
 		broadcastHistory:  make(chan historyPayload, 32),
+		broadcastStatus:   make(chan StatusResponse, 32),
 		broadcastReset:    make(chan resetPayload, 8),
 		broadcastSettings: make(chan settingsPayload, 8),
 	}
@@ -59,6 +61,12 @@ func (h *Hub) Run(done <-chan struct{}) {
 			h.mu.Lock()
 			for client := range h.clients {
 				client.sendJSON(wsMessage{Type: "history", Payload: mustMarshal(payload)})
+			}
+			h.mu.Unlock()
+		case payload := <-h.broadcastStatus:
+			h.mu.Lock()
+			for client := range h.clients {
+				client.sendJSON(wsMessage{Type: "status", Payload: mustMarshal(payload)})
 			}
 			h.mu.Unlock()
 		case payload := <-h.broadcastReset:

@@ -32,6 +32,7 @@ type GameState struct {
 	ForcedCaptureMoves []Move
 	LastMessage        string
 	WinningLine        []Move
+	WinningCapturePair []Move
 }
 
 func DefaultGameState(settings GameSettings) GameState {
@@ -59,6 +60,7 @@ func (s *GameState) Reset(settings GameSettings) {
 	s.ForcedCaptureMoves = nil
 	s.LastMessage = ""
 	s.WinningLine = nil
+	s.WinningCapturePair = nil
 	s.recomputeHashes()
 }
 
@@ -67,6 +69,7 @@ func (s GameState) Clone() GameState {
 	clone.Board = s.Board.Clone()
 	clone.ForcedCaptureMoves = append([]Move(nil), s.ForcedCaptureMoves...)
 	clone.WinningLine = append([]Move(nil), s.WinningLine...)
+	clone.WinningCapturePair = append([]Move(nil), s.WinningCapturePair...)
 	return clone
 }
 

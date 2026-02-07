@@ -214,8 +214,8 @@ export default function AnalysePage() {
             <label>
               Next player
               <select value={nextPlayer} onChange={(event) => setNextPlayer(Number(event.target.value))}>
-                <option value={1}>Black</option>
-                <option value={2}>White</option>
+                <option value={1}>Blue</option>
+                <option value={2}>Red</option>
               </select>
             </label>
             <label className="toggle">

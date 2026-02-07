@@ -6,14 +6,14 @@ type GameController struct {
 	mu             sync.Mutex
 	game           Game
 	ghostEnabled   func() bool
-	ghostPublisher func(Board)
+	ghostPublisher func(ghostPayload)
 }
 
 func NewGameController(settings GameSettings) *GameController {
 	return &GameController{game: NewGame(settings)}
 }
 
-func (gc *GameController) SetGhostPublisher(enabled func() bool, publisher func(Board)) {
+func (gc *GameController) SetGhostPublisher(enabled func() bool, publisher func(ghostPayload)) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 	gc.ghostEnabled = enabled
@@ -61,6 +61,12 @@ func (gc *GameController) History() MoveHistory {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 	return gc.game.History()
+}
+
+func (gc *GameController) CurrentTurnStartedAtMs() int64 {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	return gc.game.TurnStartedAtMs()
 }
 
 func (gc *GameController) LatestHistoryEntry() (HistoryEntry, bool) {

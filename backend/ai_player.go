@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math"
+	"math/rand"
 	"runtime"
 	"sort"
 	"strings"
@@ -32,6 +34,8 @@ type AIPlayer struct {
 	ponderStop    atomic.Bool
 }
 
+var moveRandomizer = rand.New(rand.NewSource(time.Now().UnixNano()))
+
 func NewAIPlayer() *AIPlayer {
 	player := &AIPlayer{}
 	player.ponderCond = sync.NewCond(&player.ponderMu)
@@ -57,23 +61,23 @@ func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
 		Stats:     stats,
 	}
 	scores := ScoreBoard(state, rules, settings)
-	bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
-	if ok {
-		if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, settings, bestMove); changed {
-			bestMove = lostModeMove
-		}
-	}
+	bestMove, ok := a.selectBestMove(state, rules, settings, stats, scores)
 	if config.AiLogSearchStats {
 		logSearchStats("choose", stats, settings)
 	}
 	if ok {
+		logMoveSelection(state.ToMove, bestMove, stats.CompletedDepths, settings.BoardSize)
 		bestMove.Depth = stats.CompletedDepths
 		return bestMove
 	}
 	return Move{}
 }
 
-func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(GameState)) {
+func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(GameState), depthSink func(move Move, depth int, score float64)) {
+	a.StartThinkingWithConfig(state, rules, ghostSink, depthSink, GetConfig())
+}
+
+func (a *AIPlayer) StartThinkingWithConfig(state GameState, rules Rules, ghostSink func(GameState), depthSink func(move Move, depth int, score float64), config Config) {
 	if a.thinking.Load() {
 		return
 	}
@@ -89,7 +93,6 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 	rulesCopy := rules
 	done := make(chan struct{})
 	a.workerDone = done
-	config := GetConfig()
 	go func() {
 		defer close(done)
 		stats := &SearchStats{Start: time.Now()}
@@ -122,6 +125,14 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 				ghostSink(gs)
 			}
 		}
+		if depthSink != nil {
+			settings.OnDepthComplete = func(depth int, move Move, score float64) {
+				if a.stopSignal.Load() {
+					return
+				}
+				depthSink(move, depth, score)
+			}
+		}
 		scores := ScoreBoard(stateCopy, rulesCopy, settings)
 		if a.stopSignal.Load() {
 			a.moveReady.Store(false)
@@ -129,18 +140,18 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 			a.thinking.Store(false)
 			return
 		}
-		bestMove, ok := bestMoveFromScores(scores, stateCopy, rulesCopy, settings.BoardSize)
-		if ok {
-			if lostModeMove, changed := maybeSelectLostModeMove(scores, stateCopy, rulesCopy, settings, bestMove); changed {
-				bestMove = lostModeMove
-			}
-		}
+		bestMove, ok := a.selectBestMove(stateCopy, rulesCopy, settings, stats, scores)
 		if settings.Config.AiLogSearchStats {
 			logSearchStats("think", settings.Stats, settings)
 		}
 		a.moveMutex.Lock()
 		if ok {
+			logMoveSelection(stateCopy.ToMove, bestMove, stats.CompletedDepths, settings.BoardSize)
 			bestMove.Depth = stats.CompletedDepths
+			if depthSink != nil {
+				score := scores[bestMove.Y*settings.BoardSize+bestMove.X]
+				depthSink(bestMove, stats.CompletedDepths, score)
+			}
 			a.readyMove = bestMove
 		} else {
 			a.readyMove = Move{}
@@ -150,6 +161,17 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 		a.ghostActive.Store(false)
 		a.thinking.Store(false)
 	}()
+}
+
+func (a *AIPlayer) StopThinking() {
+	a.stopSignal.Store(true)
+	if a.workerDone != nil {
+		<-a.workerDone
+	}
+	a.moveReady.Store(false)
+	a.ghostActive.Store(false)
+	a.thinking.Store(false)
+	a.stopSignal.Store(false)
 }
 
 func (a *AIPlayer) IsThinking() bool {
@@ -229,12 +251,7 @@ func (a *AIPlayer) startPonderWorker() {
 			if a.stopSignal.Load() || a.ponderVersion.Load() != version {
 				continue
 			}
-			bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
-			if ok {
-				if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, settings, bestMove); changed {
-					bestMove = lostModeMove
-				}
-			}
+			bestMove, ok := a.selectBestMove(state, rules, settings, stats, scores)
 			if settings.Config.AiLogSearchStats {
 				logSearchStats("ponder", stats, settings)
 			}
@@ -339,6 +356,65 @@ func bestMoveFromScores(scores []float64, state GameState, rules Rules, size int
 	return bestMove, true
 }
 
+func (a *AIPlayer) selectBestMove(state GameState, rules Rules, settings AIScoreSettings, stats *SearchStats, scores []float64) (Move, bool) {
+	candidates := collectCandidateMoves(state, state.ToMove, settings.BoardSize)
+	candidateSet := buildCandidateSet(candidates)
+	bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+	if !ok {
+		return Move{}, false
+	}
+	candidateFallbackUsed := false
+	if _, ok := candidateSet[moveKey{X: bestMove.X, Y: bestMove.Y}]; !ok {
+		log.Printf("[ai-player] best move %v outside candidate set, trying fallback candidate", bestMove)
+		if fallback, found := firstLegalCandidate(state, rules, candidates, settings.BoardSize); found {
+			log.Printf("[ai-player] fallback candidate %v", fallback)
+			bestMove = fallback
+			candidateFallbackUsed = true
+		} else {
+			log.Printf("[ai-player] no candidate fallback found")
+			return a.ensureLegalOrFallback(state, rules, settings, false, Move{})
+		}
+	}
+	fallbackUsed := false
+	if candidateFallbackUsed {
+		// Keep fallback candidate, avoid depth-1 fallback override.
+		fallbackUsed = true
+	} else {
+		bestMove, fallbackUsed = a.maybeDepthOneBackup(state, rules, scores, bestMove, settings.BoardSize, stats.CompletedDepths)
+	}
+	if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, settings, bestMove); changed {
+		bestMove = lostModeMove
+		fallbackUsed = false
+		if _, ok := candidateSet[moveKey{X: bestMove.X, Y: bestMove.Y}]; !ok {
+			log.Printf("[ai-player] lost-mode move %v outside candidate set, reverting to fallback candidate", bestMove)
+			if fallback, found := firstLegalCandidate(state, rules, candidates, settings.BoardSize); found {
+				bestMove = fallback
+			} else {
+				return a.ensureLegalOrFallback(state, rules, settings, false, Move{})
+			}
+		}
+	}
+	return a.ensureLegalOrFallback(state, rules, settings, fallbackUsed, bestMove)
+}
+
+func (a *AIPlayer) ensureLegalOrFallback(state GameState, rules Rules, settings AIScoreSettings, fallbackUsed bool, move Move) (Move, bool) {
+	if ok, _ := rules.IsLegal(state, move, state.ToMove); ok {
+		return move, true
+	}
+	if !fallbackUsed {
+		if fallback, ok := a.depthOneBackupMove(state, rules); ok {
+			log.Printf("[ai-player] using depth-1 fallback move %v", fallback)
+			return fallback, true
+		}
+	}
+	if fallback, ok := randomAdjacentMove(state, rules); ok {
+		log.Printf("[ai-player] using random adjacent fallback move %v", fallback)
+		return fallback, true
+	}
+	log.Printf("[ai-player] no fallback move available")
+	return Move{}, false
+}
+
 type lostModeCandidate struct {
 	move  Move
 	score float64
@@ -351,6 +427,7 @@ func maybeSelectLostModeMove(scores []float64, state GameState, rules Rules, set
 	if !cfg.AiEnableLostMode {
 		return Move{}, false
 	}
+
 	minDepth := cfg.AiLostModeMinDepth
 	if minDepth < 2 {
 		minDepth = 2
@@ -420,6 +497,136 @@ func maybeSelectLostModeMove(scores []float64, state GameState, rules Rules, set
 		return Move{}, false
 	}
 	return chosen, true
+}
+
+func (a *AIPlayer) maybeDepthOneBackup(state GameState, rules Rules, scores []float64, best Move, boardSize, completedDepth int) (Move, bool) {
+	config := GetConfig()
+	if completedDepth < config.AiDepth {
+		return best, false
+	}
+	bestScore := scoreForMove(scores, best, boardSize)
+	if bestScore > -winScore/2 {
+		return best, false
+	}
+	if fallback, ok := a.depthOneBackupMove(state, rules); ok {
+		return fallback, true
+	}
+	return best, false
+}
+
+func (a *AIPlayer) depthOneBackupMove(state GameState, rules Rules) (Move, bool) {
+	config := GetConfig()
+	settings := AIScoreSettings{
+		Depth:            1,
+		TimeoutMs:        config.AiTimeoutMs,
+		BoardSize:        state.Board.Size(),
+		Player:           state.ToMove,
+		Cache:            SharedSearchCache(),
+		Config:           config,
+		SkipQueueBacklog: true,
+	}
+	scores := ScoreBoard(state.Clone(), rules, settings)
+	return bestMoveFromScores(scores, state, rules, settings.BoardSize)
+}
+
+func scoreForMove(scores []float64, move Move, boardSize int) float64 {
+	if !move.IsValid(boardSize) {
+		return math.Inf(1)
+	}
+	idx := move.Y*boardSize + move.X
+	if idx < 0 || idx >= len(scores) {
+		return math.Inf(1)
+	}
+	return scores[idx]
+}
+
+func randomAdjacentMove(state GameState, rules Rules) (Move, bool) {
+	size := state.Board.Size()
+	if size <= 0 {
+		return Move{}, false
+	}
+	visited := make([]bool, size*size)
+	var moves []Move
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			if state.Board.At(x, y) == CellEmpty {
+				continue
+			}
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if dx == 0 && dy == 0 {
+						continue
+					}
+					nx := x + dx
+					ny := y + dy
+					if !state.Board.InBounds(nx, ny) {
+						continue
+					}
+					if state.Board.At(nx, ny) != CellEmpty {
+						continue
+					}
+					idx := ny*size + nx
+					if visited[idx] {
+						continue
+					}
+					visited[idx] = true
+					moves = append(moves, Move{X: nx, Y: ny})
+				}
+			}
+		}
+	}
+	if len(moves) == 0 {
+		return Move{}, false
+	}
+	moveRandomizer.Shuffle(len(moves), func(i, j int) {
+		moves[i], moves[j] = moves[j], moves[i]
+	})
+	for _, move := range moves {
+		if ok, _ := rules.IsLegal(state, move, state.ToMove); ok {
+			return move, true
+		}
+	}
+	return Move{}, false
+}
+
+type moveKey struct {
+	X int
+	Y int
+}
+
+func buildCandidateSet(candidates []candidateMove) map[moveKey]struct{} {
+	set := make(map[moveKey]struct{}, len(candidates))
+	for _, cand := range candidates {
+		set[moveKey{X: cand.move.X, Y: cand.move.Y}] = struct{}{}
+	}
+	return set
+}
+
+func logMoveSelection(player PlayerColor, move Move, depth, boardSize int) {
+	if boardSize <= 0 {
+		return
+	}
+	if !move.IsValid(boardSize) {
+		return
+	}
+	playerID := 1
+	if player == PlayerWhite {
+		playerID = 2
+	}
+	log.Printf("[ai-player] Player %d played [%d,%d] depth=%d", playerID, move.X, move.Y, depth)
+}
+
+func firstLegalCandidate(state GameState, rules Rules, candidates []candidateMove, boardSize int) (Move, bool) {
+	for _, cand := range candidates {
+		move := cand.move
+		if !move.IsValid(boardSize) {
+			continue
+		}
+		if ok, _ := rules.IsLegal(state, move, state.ToMove); ok {
+			return move, true
+		}
+	}
+	return Move{}, false
 }
 
 func collectLostModeCandidates(scores []float64, state GameState, rules Rules, size int, maximizing bool) []lostModeCandidate {

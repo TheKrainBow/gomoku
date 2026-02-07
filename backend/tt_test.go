@@ -17,7 +17,7 @@ func TestTTConcurrentProbeStore(t *testing.T) {
 				key := mixKey(seed ^ uint64(i))
 				depth := (i % 8) + 1
 				move := Move{X: i % 19, Y: (i / 19) % 19}
-				tt.Store(key, depth, float64(i), TTExact, move)
+				tt.Store(key, depth, float64(i), TTExact, move, TTMeta{})
 				tt.Probe(key)
 				tt.Probe(key ^ 0x9e3779b97f4a7c15)
 			}

@@ -252,6 +252,140 @@ func TestScoreBoardDirectDepthParallelReportsProgressAtDepthOne(t *testing.T) {
 	}
 }
 
+func TestCountCapturablePairsDetectsHangingPair(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	state := DefaultGameState(settings)
+	state.Board.Set(1, 4, CellBlack)
+	state.Board.Set(2, 4, CellBlack)
+	state.Board.Set(3, 4, CellWhite)
+
+	if got := countCapturablePairs(state.Board, PlayerBlack); got != 1 {
+		t.Fatalf("expected one hanging black pair, got %d", got)
+	}
+	if got := countCapturablePairs(state.Board, PlayerWhite); got != 0 {
+		t.Fatalf("expected no hanging white pair, got %d", got)
+	}
+}
+
+func TestCaptureUrgencyHeuristicPenalizesOpponentCaptureWinThreat(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlack = false
+	settings.ForbidDoubleThreeWhite = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerBlack
+	state.Status = StatusRunning
+	state.Board.Set(1, 4, CellBlack)
+	state.Board.Set(2, 4, CellBlack)
+	state.Board.Set(3, 4, CellWhite)
+	state.CapturedWhite = 8
+
+	score := captureUrgencyHeuristic(state, rules)
+	if score > -winScore/4 {
+		t.Fatalf("expected strong penalty for opponent capture-win threat, got %.2f", score)
+	}
+}
+
+func TestHeuristicForMoveStronglyPenalizesCreatingCapturablePair(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlack = false
+	settings.ForbidDoubleThreeWhite = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerBlack
+	state.Status = StatusRunning
+	// Risk pattern around y=4:
+	// x=3 is empty, x=4 is Black, x=5 is candidate move, x=6 is White.
+	// Playing at (5,4) creates B B with White on one side and empty on the other,
+	// giving White an immediate free capture at (3,4).
+	state.Board.Set(4, 4, CellBlack)
+	state.Board.Set(6, 4, CellWhite)
+	state.recomputeHashes()
+
+	scoreSettings := AIScoreSettings{
+		BoardSize: settings.BoardSize,
+		Player:    PlayerBlack,
+		Config:    DefaultConfig(),
+	}
+	risky := heuristicForMove(state, rules, scoreSettings, Move{X: 5, Y: 4})
+	safer := heuristicForMove(state, rules, scoreSettings, Move{X: 4, Y: 5})
+
+	if risky >= safer-1000.0 {
+		t.Fatalf("expected risky move to be strongly penalized (risky=%.2f safer=%.2f)", risky, safer)
+	}
+}
+
+func TestFindCaptureThreatResponsesBlocksDecisiveThreat(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlack = false
+	settings.ForbidDoubleThreeWhite = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerBlack
+	state.Status = StatusRunning
+	state.Board.Set(1, 4, CellBlack)
+	state.Board.Set(2, 4, CellBlack)
+	state.Board.Set(3, 4, CellWhite)
+	state.CapturedWhite = 8
+	state.recomputeHashes()
+
+	if !hasDecisiveCaptureThreat(state, rules, PlayerWhite) {
+		t.Fatalf("expected white to have a decisive capture threat")
+	}
+	responses := findCaptureThreatResponses(state, rules, PlayerBlack, PlayerWhite, settings.BoardSize)
+	if len(responses) == 0 {
+		t.Fatalf("expected at least one legal response to decisive capture threat")
+	}
+
+	hasBlock := false
+	for _, move := range responses {
+		if move.X == 0 && move.Y == 4 {
+			hasBlock = true
+		}
+		next := state
+		var undo searchMoveUndo
+		if !applyMoveWithUndo(&next, rules, move, PlayerBlack, &undo) {
+			t.Fatalf("response move should be legal: (%d,%d)", move.X, move.Y)
+		}
+		if hasDecisiveCaptureThreat(next, rules, PlayerWhite) {
+			t.Fatalf("response move (%d,%d) still leaves decisive capture threat", move.X, move.Y)
+		}
+		undoMoveWithUndo(&next, undo)
+	}
+	if !hasBlock {
+		t.Fatalf("expected direct blocking move (0,4) to be included in responses")
+	}
+}
+
+func TestHasDecisiveCaptureThreatDetectsImmediateCaptureWinByCount(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlack = false
+	settings.ForbidDoubleThreeWhite = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerBlack
+	state.Status = StatusRunning
+	state.CapturedWhite = 8
+	// White can capture the Black pair at x=[4,5], y=4 by playing at (3,4).
+	state.Board.Set(4, 4, CellBlack)
+	state.Board.Set(5, 4, CellBlack)
+	state.Board.Set(6, 4, CellWhite)
+	state.recomputeHashes()
+
+	if !hasDecisiveCaptureThreat(state, rules, PlayerWhite) {
+		t.Fatalf("expected immediate capture-win threat to be detected")
+	}
+}
+
 func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AiEnableHardPlyCaps = true
@@ -390,7 +524,7 @@ func TestScoreBoardUsesRootTTExactShortcut(t *testing.T) {
 	}
 	best := Move{X: 4, Y: 3}
 	rootKey := ttKeyFor(state, settings.BoardSize)
-	tt.Store(rootKey, 10, 1234, TTExact, best)
+	tt.Store(rootKey, 10, 1234, TTExact, best, TTMeta{})
 
 	stats := &SearchStats{}
 	scores := ScoreBoard(state, rules, AIScoreSettings{
@@ -414,5 +548,89 @@ func TestScoreBoardUsesRootTTExactShortcut(t *testing.T) {
 	}
 	if stats.Nodes != 0 {
 		t.Fatalf("expected no node search when TT shortcut is used, got %d", stats.Nodes)
+	}
+}
+
+func TestScoreBoardUsesRootTransposeShortcutAcrossTranslation(t *testing.T) {
+	prev := GetConfig()
+	cfg := prev
+	cfg.AiDepth = 3
+	cfg.AiMinDepth = 3
+	cfg.AiMaxDepth = 3
+	cfg.AiQuickWinExit = false
+	cfg.AiEnableEvalCache = false
+	cfg.AiEnableAspiration = false
+	cfg.AiEnableKillerMoves = false
+	cfg.AiEnableHistoryMoves = false
+	cfg.AiEnableRootTranspose = true
+	cfg.AiRootTransposeSize = 1 << 10
+	cfg.AiTimeBudgetMs = 0
+	configStore.Update(cfg)
+	defer func() {
+		configStore.Update(prev)
+		FlushGlobalCaches()
+	}()
+
+	settings := DefaultGameSettings()
+	settings.BoardSize = 15
+	rules := NewRules(settings)
+
+	base := DefaultGameState(settings)
+	base.Status = StatusRunning
+	base.ToMove = PlayerBlack
+	base.Board.Set(6, 6, CellBlack)
+	base.Board.Set(7, 6, CellWhite)
+	base.Board.Set(6, 7, CellBlack)
+	base.recomputeHashes()
+
+	cache := newAISearchCache()
+	statsBase := &SearchStats{}
+	scoresBase := ScoreBoard(base, rules, AIScoreSettings{
+		Depth:     3,
+		TimeoutMs: 0,
+		BoardSize: settings.BoardSize,
+		Player:    base.ToMove,
+		Cache:     &cache,
+		Config:    cfg,
+		Stats:     statsBase,
+	})
+	bestBase, ok := bestMoveFromScores(scoresBase, base, rules, settings.BoardSize)
+	if !ok {
+		t.Fatalf("expected base search to produce move")
+	}
+
+	translated := DefaultGameState(settings)
+	translated.Status = StatusRunning
+	translated.ToMove = PlayerBlack
+	dx, dy := 1, 1
+	translated.Board.Set(6+dx, 6+dy, CellBlack)
+	translated.Board.Set(7+dx, 6+dy, CellWhite)
+	translated.Board.Set(6+dx, 7+dy, CellBlack)
+	translated.recomputeHashes()
+
+	if ttKeyFor(base, settings.BoardSize) == ttKeyFor(translated, settings.BoardSize) {
+		t.Fatalf("expected translated board to have different absolute TT key")
+	}
+
+	statsTranslated := &SearchStats{}
+	scoresTranslated := ScoreBoard(translated, rules, AIScoreSettings{
+		Depth:     3,
+		TimeoutMs: 0,
+		BoardSize: settings.BoardSize,
+		Player:    translated.ToMove,
+		Cache:     &cache,
+		Config:    cfg,
+		Stats:     statsTranslated,
+	})
+	bestTranslated, ok := bestMoveFromScores(scoresTranslated, translated, rules, settings.BoardSize)
+	if !ok {
+		t.Fatalf("expected translated search to produce move")
+	}
+
+	if statsTranslated.Nodes != 0 {
+		t.Fatalf("expected translated board to use root transpose shortcut (no node search), got nodes=%d", statsTranslated.Nodes)
+	}
+	if bestTranslated.X != bestBase.X+dx || bestTranslated.Y != bestBase.Y+dy {
+		t.Fatalf("expected translated best move (%d,%d), got (%d,%d)", bestBase.X+dx, bestBase.Y+dy, bestTranslated.X, bestTranslated.Y)
 	}
 }

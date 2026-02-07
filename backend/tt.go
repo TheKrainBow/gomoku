@@ -25,6 +25,29 @@ type TTEntry struct {
 	GenWritten  uint32
 	GenLastUsed uint32
 	Valid       bool
+	GrowLeft    uint8
+	GrowRight   uint8
+	GrowTop     uint8
+	GrowBottom  uint8
+	HitLeft     bool
+	HitRight    bool
+	HitTop      bool
+	HitBottom   bool
+	FrameW      uint8
+	FrameH      uint8
+}
+
+type TTMeta struct {
+	GrowLeft   int
+	GrowRight  int
+	GrowTop    int
+	GrowBottom int
+	FrameW     int
+	FrameH     int
+	HitLeft    bool
+	HitRight   bool
+	HitTop     bool
+	HitBottom  bool
 }
 
 func (e TTEntry) ScoreFloat() float64 {
@@ -116,7 +139,7 @@ func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
 	return TTEntry{}, false
 }
 
-func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag TTFlag, best Move) (replaced bool, overwrote bool) {
+func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag TTFlag, best Move, meta TTMeta) (replaced bool, overwrote bool) {
 	stripe := tt.stripeIndexForKey(key)
 	tt.stripeLocks[stripe].Lock()
 	defer tt.stripeLocks[stripe].Unlock()
@@ -140,6 +163,16 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 			Score:       score,
 			Flag:        flag,
 			BestMove:    best,
+			GrowLeft:    clampToUint8(meta.GrowLeft),
+			GrowRight:   clampToUint8(meta.GrowRight),
+			GrowTop:     clampToUint8(meta.GrowTop),
+			GrowBottom:  clampToUint8(meta.GrowBottom),
+			HitLeft:     meta.HitLeft,
+			HitRight:    meta.HitRight,
+			HitTop:      meta.HitTop,
+			HitBottom:   meta.HitBottom,
+			FrameW:      clampToUint8(meta.FrameW),
+			FrameH:      clampToUint8(meta.FrameH),
 			GenWritten:  gen,
 			GenLastUsed: gen,
 			Valid:       true,
@@ -158,6 +191,16 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 			Score:       score,
 			Flag:        flag,
 			BestMove:    best,
+			GrowLeft:    clampToUint8(meta.GrowLeft),
+			GrowRight:   clampToUint8(meta.GrowRight),
+			GrowTop:     clampToUint8(meta.GrowTop),
+			GrowBottom:  clampToUint8(meta.GrowBottom),
+			HitLeft:     meta.HitLeft,
+			HitRight:    meta.HitRight,
+			HitTop:      meta.HitTop,
+			HitBottom:   meta.HitBottom,
+			FrameW:      clampToUint8(meta.FrameW),
+			FrameH:      clampToUint8(meta.FrameH),
 			GenWritten:  gen,
 			GenLastUsed: gen,
 			Valid:       true,
@@ -211,6 +254,13 @@ func (tt *TranspositionTable) Count() int {
 	return count
 }
 
+func (tt *TranspositionTable) Capacity() int {
+	if tt == nil {
+		return 0
+	}
+	return len(tt.entries)
+}
+
 func (tt *TranspositionTable) currentGeneration() uint32 {
 	gen := tt.gen.Load()
 	if gen != 0 {
@@ -248,6 +298,23 @@ func (tt *TranspositionTable) unlockAllStripesRead() {
 	for i := len(tt.stripeLocks) - 1; i >= 0; i-- {
 		tt.stripeLocks[i].RUnlock()
 	}
+}
+
+func (tt *TranspositionTable) snapshotEntries() []TTEntry {
+	tt.lockAllStripes()
+	defer tt.unlockAllStripes()
+	entries := make([]TTEntry, len(tt.entries))
+	copy(entries, tt.entries)
+	return entries
+}
+
+func (tt *TranspositionTable) loadEntries(entries []TTEntry) {
+	tt.lockAllStripes()
+	defer tt.unlockAllStripes()
+	if len(entries) > len(tt.entries) {
+		entries = entries[:len(tt.entries)]
+	}
+	copy(tt.entries[:len(entries)], entries)
 }
 
 func replacementClass(entry TTEntry, depth int, flag TTFlag, gen uint32) int {
