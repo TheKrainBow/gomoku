@@ -273,6 +273,12 @@ func main() {
 	r.Get("/api/cache/tt", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ttCacheStatus())
 	})
+	r.Delete("/api/cache/tt", func(w http.ResponseWriter, r *http.Request) {
+		FlushGlobalCaches()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"cleared": true,
+		})
+	})
 	r.Get("/api/cache/tt/entries", func(w http.ResponseWriter, r *http.Request) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))

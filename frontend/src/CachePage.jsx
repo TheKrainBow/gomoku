@@ -10,6 +10,7 @@ export default function CachePage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
   const [deletingHash, setDeletingHash] = useState('')
+  const [clearingAll, setClearingAll] = useState(false)
 
   const loadEntries = async (nextOffset, append) => {
     if (append) {
@@ -72,6 +73,36 @@ export default function CachePage() {
       setError(err instanceof Error ? err.message : 'unknown error')
     } finally {
       setDeletingHash('')
+    }
+  }
+
+  const onClearAll = async () => {
+    if (clearingAll) {
+      return
+    }
+    const ok = window.confirm(
+      'This will prune the whole cache (TT + related caches). This cannot be undone. Continue?'
+    )
+    if (!ok) {
+      return
+    }
+    setClearingAll(true)
+    setError('')
+    try {
+      const res = await fetch('/api/cache/tt', {
+        method: 'DELETE'
+      })
+      if (!res.ok) {
+        throw new Error(`failed: ${res.status}`)
+      }
+      setItems([])
+      setTotal(0)
+      setOffset(0)
+      await loadEntries(0, false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'unknown error')
+    } finally {
+      setClearingAll(false)
     }
   }
 
@@ -150,6 +181,9 @@ export default function CachePage() {
           </button>
           <button type="button" onClick={onLoadMore} disabled={!hasMore || loading || loadingMore}>
             {loadingMore ? 'Loading...' : hasMore ? 'Load more' : 'No more entries'}
+          </button>
+          <button type="button" className="danger" onClick={onClearAll} disabled={clearingAll || loading || loadingMore}>
+            {clearingAll ? 'Pruning...' : 'Prune whole cache'}
           </button>
         </div>
       </section>
