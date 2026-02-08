@@ -58,7 +58,7 @@ func TestRootTransposePersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("expected TT")
 	}
 	ttKey := uint64(0x12345)
-	tt.Store(ttKey, 7, 42, TTExact, Move{X: 3, Y: 3}, TTMeta{})
+	tt.Store(ttKey, heuristicHashFromConfig(cfg), 7, 42, TTExact, Move{X: 3, Y: 3}, TTMeta{})
 
 	rt := ensureRootTransposeCache(&cache, cfg)
 	if rt == nil {
@@ -83,7 +83,7 @@ func TestRootTransposePersistenceRoundTrip(t *testing.T) {
 	if loadedTT == nil {
 		t.Fatalf("expected loaded TT")
 	}
-	ttEntry, ok := loadedTT.Probe(ttKey)
+	ttEntry, ok := loadedTT.Probe(ttKey, heuristicHashFromConfig(cfg))
 	if !ok || !ttEntry.Valid {
 		t.Fatalf("expected TT entry to be restored")
 	}

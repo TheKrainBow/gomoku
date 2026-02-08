@@ -14,17 +14,12 @@ const (
 	illegalScore = -1e9
 	winScore     = 2000000000.0
 	// Keep node-loop instrumentation cheap: sample high-cost timers and emit progress in chunks.
-	searchTimingSampleMask    int64 = 0x3ff // 1/1024
-	searchProgressChunkMask   int64 = 0x3f  // 64
-	lmrLateMoveStart                = 4
-	lmrMinDepth                     = 4
-	lmrReduction                    = 1
-	maxSearchBoardCells             = 19 * 19
-	captureNowWeight                = 2200.0
-	captureDoubleThreatWeight       = 2600.0
-	captureNearWinWeight            = 12000.0
-	captureInTwoWeight              = 700.0
-	hangingPairWeight               = 2400.0
+	searchTimingSampleMask  int64 = 0x3ff // 1/1024
+	searchProgressChunkMask int64 = 0x3f  // 64
+	lmrLateMoveStart              = 4
+	lmrMinDepth                   = 4
+	lmrReduction                  = 1
+	maxSearchBoardCells           = 19 * 19
 )
 
 type AISearchCache struct {
@@ -1524,7 +1519,7 @@ func evalBoardCached(state GameState, rules Rules, settings AIScoreSettings, cac
 		evalStart = time.Now()
 	}
 	value := EvaluateBoard(board, PlayerBlack, settings.Config)
-	value += captureUrgencyHeuristic(state, rules)
+	value += captureUrgencyHeuristic(state, rules, settings.Config)
 	if stats := settings.Stats; stats != nil {
 		stats.HeuristicCalls++
 		if sampleEvalTiming {
@@ -1539,42 +1534,43 @@ func evalBoardCached(state GameState, rules Rules, settings AIScoreSettings, cac
 	return value
 }
 
-func captureUrgencyHeuristic(state GameState, rules Rules) float64 {
+func captureUrgencyHeuristic(state GameState, rules Rules, config Config) float64 {
+	heuristics := resolvedHeuristicConfig(config)
 	blackCaptureMoves := findCaptureMoves(state, rules, PlayerBlack)
 	whiteCaptureMoves := findCaptureMoves(state, rules, PlayerWhite)
 
 	score := 0.0
-	score += float64(len(blackCaptureMoves)-len(whiteCaptureMoves)) * captureNowWeight
+	score += float64(len(blackCaptureMoves)-len(whiteCaptureMoves)) * heuristics.CaptureNow
 	if len(blackCaptureMoves) >= 2 {
-		score += captureDoubleThreatWeight
+		score += heuristics.CaptureDoubleThreat
 	}
 	if len(whiteCaptureMoves) >= 2 {
-		score -= captureDoubleThreatWeight
+		score -= heuristics.CaptureDoubleThreat
 	}
 
 	blackRemaining := rules.CaptureWinStones() - state.CapturedBlack
 	whiteRemaining := rules.CaptureWinStones() - state.CapturedWhite
 	if blackRemaining <= 2 && len(blackCaptureMoves) > 0 {
-		score += winScore * 0.95
+		score += winScore * heuristics.CaptureWinSoonScale
 	} else if blackRemaining <= 4 && len(blackCaptureMoves) > 0 {
-		score += captureNearWinWeight
+		score += heuristics.CaptureNearWin
 	}
 	if whiteRemaining <= 2 && len(whiteCaptureMoves) > 0 {
-		score -= winScore * 0.95
+		score -= winScore * heuristics.CaptureWinSoonScale
 	} else if whiteRemaining <= 4 && len(whiteCaptureMoves) > 0 {
-		score -= captureNearWinWeight
+		score -= heuristics.CaptureNearWin
 	}
 
-	if len(blackCaptureMoves) == 0 && hasCaptureInTwoPlies(state, rules, PlayerBlack, 8) {
-		score += captureInTwoWeight
+	if len(blackCaptureMoves) == 0 && hasCaptureInTwoPlies(state, rules, PlayerBlack, heuristics.CaptureInTwoLimit) {
+		score += heuristics.CaptureInTwo
 	}
-	if len(whiteCaptureMoves) == 0 && hasCaptureInTwoPlies(state, rules, PlayerWhite, 8) {
-		score -= captureInTwoWeight
+	if len(whiteCaptureMoves) == 0 && hasCaptureInTwoPlies(state, rules, PlayerWhite, heuristics.CaptureInTwoLimit) {
+		score -= heuristics.CaptureInTwo
 	}
 
 	blackHangingPairs := countCapturablePairs(state.Board, PlayerBlack)
 	whiteHangingPairs := countCapturablePairs(state.Board, PlayerWhite)
-	score += float64(whiteHangingPairs-blackHangingPairs) * hangingPairWeight
+	score += float64(whiteHangingPairs-blackHangingPairs) * heuristics.HangingPair
 
 	return score
 }
@@ -2294,6 +2290,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	tt := ensureTT(cache, ctx.settings.Config)
 	boardSize := ctx.settings.BoardSize
 	boardHash := ttKeyFor(*state, boardSize)
+	heuristicHash := heuristicHashFromConfig(ctx.settings.Config)
 	alphaOrig := alpha
 	betaOrig := beta
 	var pvMove *Move
@@ -2306,7 +2303,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 		ttStart = time.Now()
 	}
 	if tt != nil {
-		if entry, ok := tt.Probe(boardHash); ok {
+		if entry, ok := tt.Probe(boardHash, heuristicHash); ok {
 			if trace {
 				ttDuration := time.Since(ttStart).Milliseconds()
 				logAITask(ctx, ctx.logIndent+1, "TT exact probe depth=%d took=%dms hit=true", depth, ttDuration)
@@ -2445,7 +2442,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 			}
 			if tt != nil {
 				meta := buildTTMeta(*state, ctx.settings.BoardSize, ctx.footprint)
-				replaced, overwrote := tt.Store(boardHash, depth, win, TTExact, move, meta)
+				replaced, overwrote := tt.Store(boardHash, heuristicHash, depth, win, TTExact, move, meta)
 				if ctx.settings.Stats != nil {
 					ctx.settings.Stats.TTStores++
 					if replaced || overwrote {
@@ -2535,7 +2532,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	}
 	if tt != nil {
 		meta := buildTTMeta(*state, ctx.settings.BoardSize, ctx.footprint)
-		replaced, overwrote := tt.Store(boardHash, depth, best, flag, bestMove, meta)
+		replaced, overwrote := tt.Store(boardHash, heuristicHash, depth, best, flag, bestMove, meta)
 		if ctx.settings.Stats != nil {
 			ctx.settings.Stats.TTStores++
 			if replaced || overwrote {
@@ -2636,11 +2633,12 @@ func scoreBoardAtDepth(state GameState, settings AIScoreSettings, ctx minimaxCon
 		scores[i] = illegalScore
 	}
 	boardHash := ttKeyFor(state, settings.BoardSize)
+	heuristicHash := heuristicHashFromConfig(settings.Config)
 	cache := selectCache(ctx)
 	tt := ensureTT(cache, settings.Config)
 	var pvMove *Move
 	if tt != nil {
-		if entry, ok := tt.Probe(boardHash); ok {
+		if entry, ok := tt.Probe(boardHash, heuristicHash); ok {
 			if entry.BestMove.IsValid(settings.BoardSize) {
 				pv := entry.BestMove
 				pvMove = &pv
@@ -2933,8 +2931,9 @@ func scoreBoardFromRootTranspose(state GameState, rules Rules, settings AIScoreS
 }
 
 func scoreBoardFromRootTT(state GameState, rules Rules, settings AIScoreSettings, cache *AISearchCache, tt *TranspositionTable, rootHash uint64) ([]float64, bool) {
+	heuristicHash := heuristicHashFromConfig(settings.Config)
 	if tt != nil {
-		entry, ok := tt.Probe(rootHash)
+		entry, ok := tt.Probe(rootHash, heuristicHash)
 		if ok && entry.Flag == TTExact && entry.Depth >= settings.Depth && entry.BestMove.IsValid(settings.BoardSize) {
 			if legal, _ := rules.IsLegal(state, entry.BestMove, settings.Player); legal {
 				scores := make([]float64, settings.BoardSize*settings.BoardSize)
@@ -3101,9 +3100,10 @@ func ScoreBoardDirectDepthParallel(state GameState, rules Rules, settings AIScor
 	}
 
 	boardHash := ttKeyFor(state, settings.BoardSize)
+	heuristicHash := heuristicHashFromConfig(settings.Config)
 	var pvMove *Move
 	if tt != nil {
-		if entry, ok := tt.Probe(boardHash); ok && entry.BestMove.IsValid(settings.BoardSize) {
+		if entry, ok := tt.Probe(boardHash, heuristicHash); ok && entry.BestMove.IsValid(settings.BoardSize) {
 			pv := entry.BestMove
 			pvMove = &pv
 		}
@@ -3322,7 +3322,7 @@ func ScoreBoardDirectDepthParallel(state GameState, rules Rules, settings AIScor
 	}
 	meta := buildTTMeta(state, settings.BoardSize, baseCtx.footprint)
 	if tt != nil && foundBest {
-		replaced, overwrote := tt.Store(boardHash, settings.Depth, bestScore, TTExact, bestMove, meta)
+		replaced, overwrote := tt.Store(boardHash, heuristicHash, settings.Depth, bestScore, TTExact, bestMove, meta)
 		if settings.Stats != nil {
 			settings.Stats.TTStores++
 			if replaced || overwrote {
@@ -3416,6 +3416,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		}
 	}
 	rootHash := ttKeyFor(state, settings.BoardSize)
+	ttHeuristicHash := heuristicHashFromConfig(settings.Config)
 	if scores, ok := scoreBoardFromRootTT(state, rules, settings, cache, tt, rootHash); ok {
 		logAITask(ctx, 1, "Root TT shortcut hit depth=%d", settings.Depth)
 		return scores
@@ -3472,7 +3473,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 					winScores[move.Y*settings.BoardSize+move.X] = win
 					if tt != nil {
 						meta := buildTTMeta(state, settings.BoardSize, ctx.footprint)
-						replaced, overwrote := tt.Store(rootHash, depth, win, TTExact, move, meta)
+						replaced, overwrote := tt.Store(rootHash, ttHeuristicHash, depth, win, TTExact, move, meta)
 						if settings.Stats != nil {
 							settings.Stats.TTStores++
 							if replaced || overwrote {
@@ -3581,7 +3582,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		}
 		meta := buildTTMeta(state, settings.BoardSize, ctx.footprint)
 		if tt != nil && bestX >= 0 && bestY >= 0 {
-			replaced, overwrote := tt.Store(rootHash, depth, bestScore, TTExact, Move{X: bestX, Y: bestY}, meta)
+			replaced, overwrote := tt.Store(rootHash, ttHeuristicHash, depth, bestScore, TTExact, Move{X: bestX, Y: bestY}, meta)
 			if settings.Stats != nil {
 				settings.Stats.TTStores++
 				if replaced || overwrote {

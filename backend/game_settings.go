@@ -16,6 +16,8 @@ type GameSettings struct {
 	CaptureWinStones       int        `json:"capture_win_stones"`
 	ForbidDoubleThreeBlack bool       `json:"forbid_double_three_black"`
 	ForbidDoubleThreeWhite bool       `json:"forbid_double_three_white"`
+	BlackHeuristics        *HeuristicConfig
+	WhiteHeuristics        *HeuristicConfig
 }
 
 func DefaultGameSettings() GameSettings {

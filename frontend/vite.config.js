@@ -7,10 +7,10 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     allowedHosts: ['localhost', 'gomoku-nginx', 'frontend', 'dev.maagosti.fr'],
-    hmr: {
-      host: 'dev.maagosti.fr',
-      clientPort: 8080,
-      protocol: 'wss'
-    }
+    // hmr: {
+    //   host: 'dev.maagosti.fr',
+    //   clientPort: 80,
+    //   protocol: 'wss'
+    // }
   }
 })

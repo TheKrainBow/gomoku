@@ -56,15 +56,26 @@ make fclean
   ```
 
 ## AI Trainer Container (Standalone)
-The AI trainer is a separate container (not in compose) that loops:
+The AI trainer is a separate container (not in compose) and supports two modes.
+
+`TRAINER_MODE=cache` (default):
 1. start AI vs AI game
 2. wait for game end
 3. wait for analyze queue to become empty
 4. repeat
 
-It logs to `/logs/AITrainer.log`, counts boards sent for analysis, and stops when:
+This mode logs to `/logs/AITrainer.log`, counts boards sent for analysis, and stops when:
 - backend TT cache is full
 - a full game generated zero new boards
+
+`TRAINER_MODE=heuristic`:
+1. fetch base heuristics from backend (`GET /api/heuristics`)
+2. keep two heuristic sets (champion + challenger)
+3. run `HEURISTIC_MATCHES_PER_ROUND` AI-vs-AI games (default `50`) with per-player heuristic overrides in `/api/start`
+4. keep the winner and mutate a new challenger around it
+5. repeat indefinitely
+
+This mode does not wait for the analysis queue between games.
 
 Build:
 ```bash
@@ -76,6 +87,10 @@ Run (uses backend through host port 8080):
 docker run -d --name gomoku-ai-trainer \
   --add-host host.docker.internal:host-gateway \
   -e BACKEND_URL=http://host.docker.internal:8080 \
+  -e TRAINER_MODE=heuristic \
+  -e HEURISTIC_MATCHES_PER_ROUND=50 \
+  -e HEURISTIC_MUTATION_STRENGTH=0.08 \
+  -e HEURISTIC_GAME_TIMEOUT_SEC=180 \
   -v "$(pwd)/logs:/logs" \
   gomoku-ai-trainer
 ```

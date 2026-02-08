@@ -168,9 +168,7 @@ func EvaluateBoard(board Board, sideToMove PlayerColor, config Config) float64 {
 }
 
 func resolveThreatWeights(config Config) ThreatWeights {
-	if config.Heuristics == (HeuristicConfig{}) {
-		config.Heuristics = DefaultConfig().Heuristics
-	}
+	config.Heuristics = resolvedHeuristicConfig(config)
 	return ThreatWeights{
 		Open4:        config.Heuristics.Open4,
 		Closed4:      config.Heuristics.Closed4,

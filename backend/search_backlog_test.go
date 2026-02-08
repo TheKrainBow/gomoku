@@ -148,7 +148,7 @@ func TestBacklogNeedsAnalysisSkipsWhenExactEntryMeetsTarget(t *testing.T) {
 	}
 	_, target := backlogDepthRange(cfg)
 	key := ttKeyFor(state, state.Board.Size())
-	tt.Store(key, target, 42, TTExact, Move{X: 0, Y: 0}, TTMeta{})
+	tt.Store(key, heuristicHashFromConfig(cfg), target, 42, TTExact, Move{X: 0, Y: 0}, TTMeta{})
 
 	info := backlogNeedsAnalysis(state, cfg, &cache)
 	if info.Needs {
@@ -219,7 +219,7 @@ func TestSuggestionDepthTenStoresTTAndSkipsBacklogEnqueue(t *testing.T) {
 		t.Fatalf("expected TT to be initialized")
 	}
 	rootKey := ttKeyFor(state, settings.BoardSize)
-	entry, hit := tt.Probe(rootKey)
+	entry, hit := tt.Probe(rootKey, heuristicHashFromConfig(cfg))
 	if !hit {
 		t.Fatalf("expected root board entry in TT")
 	}
@@ -249,7 +249,7 @@ func TestBacklogNeedsAnalysisDoesNotSkipNonExactEntry(t *testing.T) {
 	}
 	_, target := backlogDepthRange(cfg)
 	key := ttKeyFor(state, state.Board.Size())
-	tt.Store(key, target+2, 42, TTLower, Move{X: 0, Y: 0}, TTMeta{})
+	tt.Store(key, heuristicHashFromConfig(cfg), target+2, 42, TTLower, Move{X: 0, Y: 0}, TTMeta{})
 
 	info := backlogNeedsAnalysis(state, cfg, &cache)
 	if !info.Needs {
@@ -276,7 +276,7 @@ func TestBacklogNeedsAnalysisTracksExactSolvedDepthBelowTarget(t *testing.T) {
 		t.Fatalf("expected target depth >= 2, got %d", target)
 	}
 	key := ttKeyFor(state, state.Board.Size())
-	tt.Store(key, target-1, 42, TTExact, Move{X: 0, Y: 0}, TTMeta{})
+	tt.Store(key, heuristicHashFromConfig(cfg), target-1, 42, TTExact, Move{X: 0, Y: 0}, TTMeta{})
 
 	info := backlogNeedsAnalysis(state, cfg, &cache)
 	if !info.Needs {

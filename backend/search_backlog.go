@@ -499,7 +499,7 @@ func backlogNeedsAnalysis(state GameState, config Config, cache *AISearchCache) 
 		return info
 	}
 	key := ttKeyFor(state, state.Board.Size())
-	entry, ok := tt.Probe(key)
+	entry, ok := tt.Probe(key, heuristicHashFromConfig(config))
 	if ok {
 		info.HasTTEntry = true
 		info.TTEntry = entry

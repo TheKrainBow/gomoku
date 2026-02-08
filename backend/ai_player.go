@@ -16,6 +16,7 @@ import (
 type AIPlayer struct {
 	ghostMutex    sync.Mutex
 	moveMutex     sync.Mutex
+	configMutex   sync.RWMutex
 	workerDone    chan struct{}
 	thinking      atomic.Bool
 	moveReady     atomic.Bool
@@ -32,6 +33,7 @@ type AIPlayer struct {
 	ponderMove    Move
 	ponderReady   atomic.Bool
 	ponderStop    atomic.Bool
+	heuristics    *HeuristicConfig
 }
 
 var moveRandomizer = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -60,7 +62,7 @@ func (a *AIPlayer) IsHuman() bool {
 }
 
 func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
-	config := liveAIConfig(GetConfig())
+	config := a.effectiveConfig()
 	stats := &SearchStats{Start: time.Now()}
 	cache := SharedSearchCache()
 	settings := AIScoreSettings{
@@ -86,7 +88,7 @@ func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
 }
 
 func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(GameState), depthSink func(move Move, depth int, score float64)) {
-	a.StartThinkingWithConfig(state, rules, ghostSink, depthSink, GetConfig())
+	a.StartThinkingWithConfig(state, rules, ghostSink, depthSink, a.effectiveConfig())
 }
 
 func (a *AIPlayer) StartThinkingWithConfig(state GameState, rules Rules, ghostSink func(GameState), depthSink func(move Move, depth int, score float64), config Config) {
@@ -241,7 +243,7 @@ func (a *AIPlayer) startPonderWorker() {
 			lastVersion = version
 			a.ponderMu.Unlock()
 
-			config := liveAIConfig(GetConfig())
+			config := a.effectiveConfig()
 			if !config.AiPonderingEnabled {
 				continue
 			}
@@ -284,7 +286,7 @@ func (a *AIPlayer) startPonderWorker() {
 }
 
 func (a *AIPlayer) updatePonderState(state GameState, rules Rules) {
-	config := GetConfig()
+	config := a.effectiveConfig()
 	if !config.AiPonderingEnabled {
 		return
 	}
@@ -298,6 +300,23 @@ func (a *AIPlayer) updatePonderState(state GameState, rules Rules) {
 	a.ponderReady.Store(false)
 	a.ponderCond.Signal()
 	a.ponderMu.Unlock()
+}
+
+func (a *AIPlayer) SetHeuristicsOverride(heuristics *HeuristicConfig) {
+	a.configMutex.Lock()
+	a.heuristics = cloneHeuristicConfigPtr(heuristics)
+	a.configMutex.Unlock()
+}
+
+func (a *AIPlayer) effectiveConfig() Config {
+	config := GetConfig()
+	a.configMutex.RLock()
+	override := cloneHeuristicConfigPtr(a.heuristics)
+	a.configMutex.RUnlock()
+	if override != nil {
+		config.Heuristics = *override
+	}
+	return liveAIConfig(config)
 }
 
 func (a *AIPlayer) TakePonderedMove(state GameState, rules Rules) (Move, bool) {
@@ -513,7 +532,7 @@ func maybeSelectLostModeMove(scores []float64, state GameState, rules Rules, set
 }
 
 func (a *AIPlayer) maybeDepthOneBackup(state GameState, rules Rules, scores []float64, best Move, boardSize, completedDepth int) (Move, bool) {
-	config := GetConfig()
+	config := a.effectiveConfig()
 	if completedDepth < config.AiDepth {
 		return best, false
 	}
@@ -528,7 +547,7 @@ func (a *AIPlayer) maybeDepthOneBackup(state GameState, rules Rules, scores []fl
 }
 
 func (a *AIPlayer) depthOneBackupMove(state GameState, rules Rules) (Move, bool) {
-	config := liveAIConfig(GetConfig())
+	config := a.effectiveConfig()
 	settings := AIScoreSettings{
 		Depth:            1,
 		TimeoutMs:        config.AiTimeoutMs,

@@ -57,7 +57,7 @@ func TestScoreBoardStoresRootTTEntryAtCompletedDepth(t *testing.T) {
 		t.Fatalf("expected TT to be initialized")
 	}
 	rootKey := ttKeyFor(state, settings.BoardSize)
-	entry, hit := tt.Probe(rootKey)
+	entry, hit := tt.Probe(rootKey, heuristicHashFromConfig(cfg))
 	if !hit {
 		t.Fatalf("expected root board entry in TT")
 	}
@@ -283,7 +283,8 @@ func TestCaptureUrgencyHeuristicPenalizesOpponentCaptureWinThreat(t *testing.T) 
 	state.Board.Set(3, 4, CellWhite)
 	state.CapturedWhite = 8
 
-	score := captureUrgencyHeuristic(state, rules)
+	cfg := DefaultConfig()
+	score := captureUrgencyHeuristic(state, rules, cfg)
 	if score > -winScore/4 {
 		t.Fatalf("expected strong penalty for opponent capture-win threat, got %.2f", score)
 	}
@@ -524,7 +525,7 @@ func TestScoreBoardUsesRootTTExactShortcut(t *testing.T) {
 	}
 	best := Move{X: 4, Y: 3}
 	rootKey := ttKeyFor(state, settings.BoardSize)
-	tt.Store(rootKey, 10, 1234, TTExact, best, TTMeta{})
+	tt.Store(rootKey, heuristicHashFromConfig(cfg), 10, 1234, TTExact, best, TTMeta{})
 
 	stats := &SearchStats{}
 	scores := ScoreBoard(state, rules, AIScoreSettings{

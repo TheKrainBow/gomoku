@@ -124,6 +124,7 @@ The AI is controlled by both **game settings** and **global config**.
 ### Game settings (per match)
 - `BoardSize`, `WinLength`, `CaptureWinStones`: core rules that affect evaluation.
 - `ForbidDoubleThreeBlack`, `ForbidDoubleThreeWhite`: legal move restrictions.
+- `BlackHeuristics`, `WhiteHeuristics` (optional): per-AI heuristic overrides. If omitted, AI uses `Config.Heuristics` from `backend/config.go`.
 
 ### Global config (runtime)
 
@@ -146,6 +147,15 @@ The AI is controlled by both **game settings** and **global config**.
 - `Heuristics`: all threat pattern weights and fork bonuses are centralized here (see `backend/config.go`).
 
 Defaults are in `backend/config.go`.
+
+## Heuristics API
+
+- `GET /api/heuristics`: returns the currently active backend heuristic config.
+- `POST /api/start` accepts optional per-player overrides under:
+  - `settings.black_heuristics`
+  - `settings.white_heuristics`
+
+When these fields are not provided, both AIs use backend defaults.
 
 ## Threading model
 

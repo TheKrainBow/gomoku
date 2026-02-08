@@ -2,6 +2,23 @@ LAUNCHER := ./gomoku
 TRAINER_IMAGE := gomoku-ai-trainer
 TRAINER_CONTAINER := gomoku-ai-trainer
 TRAINER_BACKEND_URL ?= http://host.docker.internal:8080
+TRAINER_API_BASE ?= http://localhost:8080/api/trainer
+TRAINER_NETWORK ?= gomoku_gomoku-net
+TRAINER_POLL_INTERVAL_MS ?= 2000
+HEURISTIC_MATCHES_PER_ROUND ?= 1
+HEURISTIC_MUTATION_STRENGTH ?= 0.08
+HEURISTIC_GAME_TIMEOUT_SEC ?= 180
+TRAINER_AI_TIME_BUDGET_MS ?= 800
+TRAINER_API_ADDR ?= :8090
+TRAINER_AUTOSTART_MODE ?=
+HEURISTIC_POPULATION_SIZE ?= 8
+HEURISTIC_ELITE_COUNT ?= 2
+HEURISTIC_HISTORICAL_POOL_SIZE ?= 4
+HEURISTIC_TRAINING_OPENINGS ?= 6
+HEURISTIC_VALIDATION_OPENINGS ?= 4
+HEURISTIC_OPENING_PLIES ?= 4
+HEURISTIC_ELO_K ?= 20
+HEURISTIC_VALIDATION_PASS_RATE ?= 0.52
 
 all: $(LAUNCHER)
 
@@ -38,25 +55,33 @@ fclean:
 	fi
 	@rm -f $(LAUNCHER)
 
+trainer-start: trainer-start-heuristic
+
 trainer-build:
 	@docker build -t $(TRAINER_IMAGE) ./ai-trainer
 
-trainer-start: trainer-build
-	@mkdir -p ./logs
-	@docker rm -f $(TRAINER_CONTAINER) >/dev/null 2>&1 || true
-	@docker run -d --name $(TRAINER_CONTAINER) \
-		--add-host host.docker.internal:host-gateway \
-		-e BACKEND_URL=$(TRAINER_BACKEND_URL) \
-		-v "$(PWD)/logs:/logs" \
-		$(TRAINER_IMAGE)
+trainer-start-service:
+	@curl -sS -X POST "$(TRAINER_API_BASE)/start" \
+		-H "Content-Type: application/json" \
+		-d '{"mode":"$(if $(TRAINER_AUTOSTART_MODE),$(TRAINER_AUTOSTART_MODE),heuristic)"}'
+
+trainer-start-cache:
+	@curl -sS -X POST "$(TRAINER_API_BASE)/start" \
+		-H "Content-Type: application/json" \
+		-d '{"mode":"cache"}'
+
+trainer-start-heuristic:
+	@curl -sS -X POST "$(TRAINER_API_BASE)/start" \
+		-H "Content-Type: application/json" \
+		-d '{"mode":"heuristic"}'
 
 trainer-stop:
-	@docker rm -f $(TRAINER_CONTAINER) >/dev/null 2>&1 || true
+	@curl -sS -X POST "$(TRAINER_API_BASE)/stop"
 
 trainer-logs:
 	@docker logs -f $(TRAINER_CONTAINER)
 
 trainer-status:
-	@docker ps -a --filter "name=$(TRAINER_CONTAINER)"
+	@curl -sS "$(TRAINER_API_BASE)/status"
 
-.PHONY: all stop re clean fclean trainer-build trainer-start trainer-stop trainer-logs trainer-status
+.PHONY: all stop re clean fclean trainer-build trainer-start trainer-start-service trainer-start-cache trainer-start-heuristic trainer-stop trainer-logs trainer-status

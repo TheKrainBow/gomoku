@@ -11,5 +11,6 @@ RUN mkdir -p /logs
 
 ENV BACKEND_URL=http://backend:8080
 ENV POLL_INTERVAL_MS=2000
+ENV TRAINER_API_ADDR=:8090
 
 ENTRYPOINT ["/app/ai-trainer"]

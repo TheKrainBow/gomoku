@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 
 const pageSize = 10
+const fallbackHeuristicHash = '0x0000000000000000'
+
+function colorFromHash(hash) {
+  const normalized = (hash || fallbackHeuristicHash).toLowerCase()
+  let seed = 0
+  for (let i = 0; i < normalized.length; i += 1) {
+    seed = (seed * 131 + normalized.charCodeAt(i)) % 360
+  }
+  return {
+    border: `hsl(${seed} 72% 56%)`,
+    soft: `hsl(${seed} 72% 56% / 0.18)`,
+    chip: `hsl(${seed} 72% 56% / 0.26)`
+  }
+}
 
 export default function CachePage() {
   const [items, setItems] = useState([])
@@ -113,6 +127,17 @@ export default function CachePage() {
     return `Showing ${items.length} / ${total} entries`
   }, [loading, items.length, total])
 
+  const heuristicUsage = useMemo(() => {
+    const byHash = new Map()
+    for (const entry of items) {
+      const hash = entry.heuristic_hash || fallbackHeuristicHash
+      const current = byHash.get(hash) || { hash, count: 0 }
+      current.count += 1
+      byHash.set(hash, current)
+    }
+    return [...byHash.values()].sort((a, b) => b.count - a.count)
+  }, [items])
+
   return (
     <div className="page cache-page">
       <header className="app-header">
@@ -124,6 +149,9 @@ export default function CachePage() {
           <a className="cache-link" href="/">
             Back to game
           </a>
+          <a className="cache-link" href="/trainer">
+            Trainer
+          </a>
           <a className="cache-link" href="/minmax">
             Minmax demo
           </a>
@@ -131,13 +159,48 @@ export default function CachePage() {
       </header>
       <section className="panel cache-panel">
         {error && <div className="history-empty">Error: {error}</div>}
+        <div className="cache-hash-legend">
+          {heuristicUsage.map((usage) => {
+            const tone = colorFromHash(usage.hash)
+            return (
+              <div
+                className="cache-hash-chip"
+                key={usage.hash}
+                style={{
+                  borderColor: tone.border,
+                  background: tone.chip
+                }}
+              >
+                <span className="cache-hash-chip-dot" style={{ background: tone.border }} />
+                <span className="cache-hash-chip-hash">{usage.hash}</span>
+                <span className="cache-hash-chip-count">{usage.count}</span>
+              </div>
+            )
+          })}
+          {heuristicUsage.length > 0 && (
+            <div className="cache-hash-legend-note">counts are for currently loaded entries</div>
+          )}
+        </div>
         <div className="cache-list">
-          {items.map((entry) => (
-            <article className="cache-item" key={entry.hash}>
+          {items.map((entry, index) => {
+            const heuristicHash = entry.heuristic_hash || fallbackHeuristicHash
+            const tone = colorFromHash(heuristicHash)
+            return (
+            <article
+              className="cache-item"
+              key={`${entry.hash}-${heuristicHash}-${entry.gen_written}-${index}`}
+              style={{
+                borderColor: tone.border,
+                background: `linear-gradient(90deg, ${tone.soft}, rgba(255,255,255,0.03) 20%)`
+              }}
+            >
               <div className="cache-item-main">
                 <div className="cache-item-row">
                   <span className="cache-hash">{entry.hash}</span>
                   <span className="cache-flag">{entry.flag}</span>
+                </div>
+                <div className="cache-item-row">
+                  <span className="cache-heuristic-hash">heuristic={heuristicHash}</span>
                 </div>
                 <div className="cache-item-row">
                   <span>hits={entry.hits}</span>
@@ -172,7 +235,7 @@ export default function CachePage() {
                 {deletingHash === entry.hash ? 'Removing...' : 'Remove'}
               </button>
             </article>
-          ))}
+          )})}
           {!loading && items.length === 0 && <div className="history-empty">No TT entry found.</div>}
         </div>
         <div className="actions">

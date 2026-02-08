@@ -18,25 +18,26 @@ const (
 const ttVeryOldGenerations = 8
 
 type TTEntry struct {
-	Key         uint64
-	Depth       int
-	Score       int32
-	Flag        TTFlag
-	BestMove    Move
-	Hits        uint32
-	GenWritten  uint32
-	GenLastUsed uint32
-	Valid       bool
-	GrowLeft    uint8
-	GrowRight   uint8
-	GrowTop     uint8
-	GrowBottom  uint8
-	HitLeft     bool
-	HitRight    bool
-	HitTop      bool
-	HitBottom   bool
-	FrameW      uint8
-	FrameH      uint8
+	Key           uint64
+	HeuristicHash uint64
+	Depth         int
+	Score         int32
+	Flag          TTFlag
+	BestMove      Move
+	Hits          uint32
+	GenWritten    uint32
+	GenLastUsed   uint32
+	Valid         bool
+	GrowLeft      uint8
+	GrowRight     uint8
+	GrowTop       uint8
+	GrowBottom    uint8
+	HitLeft       bool
+	HitRight      bool
+	HitTop        bool
+	HitBottom     bool
+	FrameW        uint8
+	FrameH        uint8
 }
 
 type TTMeta struct {
@@ -122,7 +123,7 @@ func (tt *TranspositionTable) stripeIndexForKey(key uint64) int {
 	return int((key & tt.mask) & tt.stripeMask)
 }
 
-func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
+func (tt *TranspositionTable) Probe(key uint64, heuristicHash uint64) (TTEntry, bool) {
 	stripe := tt.stripeIndexForKey(key)
 	tt.stripeLocks[stripe].Lock()
 	defer tt.stripeLocks[stripe].Unlock()
@@ -131,7 +132,7 @@ func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
 	for i := 0; i < tt.buckets; i++ {
 		idx := start + i
 		entry := tt.entries[idx]
-		if !entry.Valid || entry.Key != key {
+		if !entry.Valid || entry.Key != key || entry.HeuristicHash != heuristicHash {
 			continue
 		}
 		entry.Hits++
@@ -142,7 +143,7 @@ func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
 	return TTEntry{}, false
 }
 
-func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag TTFlag, best Move, meta TTMeta) (replaced bool, overwrote bool) {
+func (tt *TranspositionTable) Store(key uint64, heuristicHash uint64, depth int, value float64, flag TTFlag, best Move, meta TTMeta) (replaced bool, overwrote bool) {
 	stripe := tt.stripeIndexForKey(key)
 	tt.stripeLocks[stripe].Lock()
 	defer tt.stripeLocks[stripe].Unlock()
@@ -154,32 +155,33 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 	for i := 0; i < tt.buckets; i++ {
 		idx := start + i
 		entry := tt.entries[idx]
-		if !entry.Valid || entry.Key != key {
+		if !entry.Valid || entry.Key != key || entry.HeuristicHash != heuristicHash {
 			continue
 		}
 		if !shouldReplaceByRules(entry, depth, flag, gen) {
 			return false, false
 		}
 		tt.entries[idx] = TTEntry{
-			Key:         key,
-			Depth:       depth,
-			Score:       score,
-			Flag:        flag,
-			BestMove:    best,
-			Hits:        0,
-			GrowLeft:    clampToUint8(meta.GrowLeft),
-			GrowRight:   clampToUint8(meta.GrowRight),
-			GrowTop:     clampToUint8(meta.GrowTop),
-			GrowBottom:  clampToUint8(meta.GrowBottom),
-			HitLeft:     meta.HitLeft,
-			HitRight:    meta.HitRight,
-			HitTop:      meta.HitTop,
-			HitBottom:   meta.HitBottom,
-			FrameW:      clampToUint8(meta.FrameW),
-			FrameH:      clampToUint8(meta.FrameH),
-			GenWritten:  gen,
-			GenLastUsed: gen,
-			Valid:       true,
+			Key:           key,
+			HeuristicHash: heuristicHash,
+			Depth:         depth,
+			Score:         score,
+			Flag:          flag,
+			BestMove:      best,
+			Hits:          0,
+			GrowLeft:      clampToUint8(meta.GrowLeft),
+			GrowRight:     clampToUint8(meta.GrowRight),
+			GrowTop:       clampToUint8(meta.GrowTop),
+			GrowBottom:    clampToUint8(meta.GrowBottom),
+			HitLeft:       meta.HitLeft,
+			HitRight:      meta.HitRight,
+			HitTop:        meta.HitTop,
+			HitBottom:     meta.HitBottom,
+			FrameW:        clampToUint8(meta.FrameW),
+			FrameH:        clampToUint8(meta.FrameH),
+			GenWritten:    gen,
+			GenLastUsed:   gen,
+			Valid:         true,
 		}
 		return false, true
 	}
@@ -190,25 +192,26 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 			continue
 		}
 		tt.entries[idx] = TTEntry{
-			Key:         key,
-			Depth:       depth,
-			Score:       score,
-			Flag:        flag,
-			BestMove:    best,
-			Hits:        0,
-			GrowLeft:    clampToUint8(meta.GrowLeft),
-			GrowRight:   clampToUint8(meta.GrowRight),
-			GrowTop:     clampToUint8(meta.GrowTop),
-			GrowBottom:  clampToUint8(meta.GrowBottom),
-			HitLeft:     meta.HitLeft,
-			HitRight:    meta.HitRight,
-			HitTop:      meta.HitTop,
-			HitBottom:   meta.HitBottom,
-			FrameW:      clampToUint8(meta.FrameW),
-			FrameH:      clampToUint8(meta.FrameH),
-			GenWritten:  gen,
-			GenLastUsed: gen,
-			Valid:       true,
+			Key:           key,
+			HeuristicHash: heuristicHash,
+			Depth:         depth,
+			Score:         score,
+			Flag:          flag,
+			BestMove:      best,
+			Hits:          0,
+			GrowLeft:      clampToUint8(meta.GrowLeft),
+			GrowRight:     clampToUint8(meta.GrowRight),
+			GrowTop:       clampToUint8(meta.GrowTop),
+			GrowBottom:    clampToUint8(meta.GrowBottom),
+			HitLeft:       meta.HitLeft,
+			HitRight:      meta.HitRight,
+			HitTop:        meta.HitTop,
+			HitBottom:     meta.HitBottom,
+			FrameW:        clampToUint8(meta.FrameW),
+			FrameH:        clampToUint8(meta.FrameH),
+			GenWritten:    gen,
+			GenLastUsed:   gen,
+			Valid:         true,
 		}
 		return false, false
 	}
@@ -235,17 +238,33 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 	}
 
 	tt.entries[victim] = TTEntry{
-		Key:         key,
-		Depth:       depth,
-		Score:       score,
-		Flag:        flag,
-		BestMove:    best,
-		Hits:        0,
-		GenWritten:  gen,
-		GenLastUsed: gen,
-		Valid:       true,
+		Key:           key,
+		HeuristicHash: heuristicHash,
+		Depth:         depth,
+		Score:         score,
+		Flag:          flag,
+		BestMove:      best,
+		Hits:          0,
+		GenWritten:    gen,
+		GenLastUsed:   gen,
+		Valid:         true,
 	}
 	return true, false
+}
+
+func (tt *TranspositionTable) DeleteByHeuristicHash(heuristicHash uint64) int {
+	tt.lockAllStripes()
+	defer tt.unlockAllStripes()
+	deleted := 0
+	for i := range tt.entries {
+		entry := tt.entries[i]
+		if !entry.Valid || entry.HeuristicHash != heuristicHash {
+			continue
+		}
+		tt.entries[i] = TTEntry{}
+		deleted++
+	}
+	return deleted
 }
 
 func (tt *TranspositionTable) DeleteByKey(key uint64) bool {

@@ -70,16 +70,31 @@ type Config struct {
 }
 
 type HeuristicConfig struct {
-	Open4        float64 `json:"open_4"`
-	Closed4      float64 `json:"closed_4"`
-	Broken4      float64 `json:"broken_4"`
-	Open3        float64 `json:"open_3"`
-	Broken3      float64 `json:"broken_3"`
-	Closed3      float64 `json:"closed_3"`
-	Open2        float64 `json:"open_2"`
-	Broken2      float64 `json:"broken_2"`
-	ForkOpen3    float64 `json:"fork_open_3"`
-	ForkFourPlus float64 `json:"fork_four_plus"`
+	Open4               float64 `json:"open_4"`
+	Closed4             float64 `json:"closed_4"`
+	Broken4             float64 `json:"broken_4"`
+	Open3               float64 `json:"open_3"`
+	Broken3             float64 `json:"broken_3"`
+	Closed3             float64 `json:"closed_3"`
+	Open2               float64 `json:"open_2"`
+	Broken2             float64 `json:"broken_2"`
+	ForkOpen3           float64 `json:"fork_open_3"`
+	ForkFourPlus        float64 `json:"fork_four_plus"`
+	CaptureNow          float64 `json:"capture_now"`
+	CaptureDoubleThreat float64 `json:"capture_double_threat"`
+	CaptureNearWin      float64 `json:"capture_near_win"`
+	CaptureInTwo        float64 `json:"capture_in_two"`
+	HangingPair         float64 `json:"hanging_pair"`
+	CaptureWinSoonScale float64 `json:"capture_win_soon_scale"`
+	CaptureInTwoLimit   int     `json:"capture_in_two_limit"`
+}
+
+func cloneHeuristicConfigPtr(src *HeuristicConfig) *HeuristicConfig {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	return &cloned
 }
 
 type ConfigStore struct {
@@ -192,19 +207,27 @@ func DefaultConfig() Config {
 		AiMinmaxCacheLimit: 1000,
 
 		Heuristics: HeuristicConfig{
-			Open4:   100000.0,
-			Closed4: 25000.0,
-			Broken4: 18000.0,
+			Open4:   131633.82492556606,
+			Closed4: 23451.264466845663,
+			Broken4: 16588.885030052134,
 
-			Open3:   18000.0,
-			Broken3: 12000.0,
-			Closed3: 800.0,
+			Open3:   19124.538397343695,
+			Broken3: 11377.927833097501,
+			Closed3: 802.1059657246053,
 
-			Open2:   350.0,
-			Broken2: 220.0,
+			Open2:   400.7080720328319,
+			Broken2: 215.2849716438038,
 
-			ForkOpen3:    45000.0,
-			ForkFourPlus: 120000.0,
+			ForkOpen3:    42035.40739524599,
+			ForkFourPlus: 130181.77247952914,
+
+			CaptureNow:          2200.0,
+			CaptureDoubleThreat: 2600.0,
+			CaptureNearWin:      12000.0,
+			CaptureInTwo:        700.0,
+			HangingPair:         2400.0,
+			CaptureWinSoonScale: 0.95,
+			CaptureInTwoLimit:   8,
 		},
 	}
 }

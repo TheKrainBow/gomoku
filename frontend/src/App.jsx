@@ -721,6 +721,9 @@ export default function App() {
           <a className="cache-link" href="/cache">
             TT cache
           </a>
+          <a className="cache-link" href="/trainer">
+            Trainer
+          </a>
           <a className="cache-link" href="/minmax">
             Minmax demo
           </a>

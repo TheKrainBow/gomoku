@@ -43,12 +43,7 @@ func (g *Game) Start() {
 		g.state.Status = StatusRunning
 		g.turnStart = time.Now()
 		g.stopMoveSuggestion(nil)
-		if aiBlack, ok := g.blackPlayer.(*AIPlayer); ok {
-			aiBlack.OnMoveApplied(g.state, g.rules)
-		}
-		if aiWhite, ok := g.whitePlayer.(*AIPlayer); ok {
-			aiWhite.OnMoveApplied(g.state, g.rules)
-		}
+		g.syncAIPlayersToCurrentState()
 	}
 }
 
@@ -323,15 +318,28 @@ func (g *Game) createPlayers() {
 	if g.settings.BlackType == PlayerHuman {
 		g.blackPlayer = NewHumanPlayer()
 	} else {
-		g.blackPlayer = NewAIPlayer()
+		ai := NewAIPlayer()
+		ai.SetHeuristicsOverride(g.settings.BlackHeuristics)
+		g.blackPlayer = ai
 	}
 	if g.settings.WhiteType == PlayerHuman {
 		g.whitePlayer = NewHumanPlayer()
 	} else {
-		g.whitePlayer = NewAIPlayer()
+		ai := NewAIPlayer()
+		ai.SetHeuristicsOverride(g.settings.WhiteHeuristics)
+		g.whitePlayer = ai
 	}
 	if g.moveSuggestionAI == nil {
 		g.moveSuggestionAI = NewAIPlayer()
+	}
+}
+
+func (g *Game) syncAIPlayersToCurrentState() {
+	if aiBlack, ok := g.blackPlayer.(*AIPlayer); ok {
+		aiBlack.OnMoveApplied(g.state, g.rules)
+	}
+	if aiWhite, ok := g.whitePlayer.(*AIPlayer); ok {
+		aiWhite.OnMoveApplied(g.state, g.rules)
 	}
 }
 
@@ -440,8 +448,9 @@ func (g *Game) startMoveSuggestion(ghostSink func(ghostPayload)) {
 	suggestionConfig.AiMinDepth = 1
 	suggestionConfig.AiTimeoutMs = 0
 	suggestionConfig.AiTimeBudgetMs = 0
+	heuristicHash := heuristicHashFromConfig(suggestionConfig)
 	if tt := ensureTT(SharedSearchCache(), suggestionConfig); tt != nil {
-		if entry, ok := tt.Probe(hash); ok && entry.Flag == TTExact && entry.BestMove.IsValid(state.Board.Size()) {
+		if entry, ok := tt.Probe(hash, heuristicHash); ok && entry.Flag == TTExact && entry.BestMove.IsValid(state.Board.Size()) {
 			if legal, _ := g.rules.IsLegal(state, entry.BestMove, state.ToMove); legal {
 				knownDepth := entry.Depth
 				if knownDepth > 10 {

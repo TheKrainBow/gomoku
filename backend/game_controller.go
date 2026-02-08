@@ -120,6 +120,9 @@ func (gc *GameController) UpdateSettings(update GameSettings, reset bool) {
 	}
 	gc.game.settings = update
 	gc.game.createPlayers()
+	if gc.game.state.Status == StatusRunning {
+		gc.game.syncAIPlayersToCurrentState()
+	}
 }
 
 func (gc *GameController) ResetForConfigChange() {

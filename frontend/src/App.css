@@ -580,6 +580,15 @@ button.danger {
   overflow: hidden;
 }
 
+.trainer-page {
+  overflow-y: auto;
+}
+
+.trainer-page .cache-panel {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
 .cache-panel {
   flex: 1;
   min-height: 0;
@@ -595,6 +604,45 @@ button.danger {
   flex-direction: column;
   gap: 8px;
   padding-right: 8px;
+}
+
+.cache-hash-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.cache-hash-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.cache-hash-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.cache-hash-chip-hash {
+  color: #f4f6fb;
+}
+
+.cache-hash-chip-count {
+  color: #d7dfe9;
+}
+
+.cache-hash-legend-note {
+  font-size: 11px;
+  color: #9da5b4;
+  align-self: center;
 }
 
 .cache-item {
@@ -634,6 +682,161 @@ button.danger {
 .cache-flag {
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+
+.cache-heuristic-hash {
+  font-family: "IBM Plex Mono", monospace;
+  color: #d7dfe9;
+}
+
+.trainer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.trainer-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px;
+}
+
+.trainer-card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.trainer-card p {
+  margin: 4px 0;
+  font-size: 12px;
+  color: #d7dfe9;
+}
+
+.trainer-rankings {
+  grid-column: 1 / -1;
+}
+
+.trainer-progress-card {
+  min-width: 0;
+}
+
+.trainer-progress-bar {
+  margin-top: 6px;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.trainer-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4f9aff, #40cea2);
+}
+
+.trainer-json-card {
+  min-width: 0;
+}
+
+.trainer-challenger-card {
+  grid-column: 1 / -1;
+}
+
+.trainer-best-preview {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.trainer-json-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trainer-json-header p {
+  margin: 0;
+}
+
+.trainer-json {
+  margin-top: 8px;
+  margin-bottom: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(9, 14, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #d7dfe9;
+}
+
+.trainer-challenger-layout {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.trainer-challenger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.trainer-challenger-item {
+  text-align: left;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.trainer-challenger-item.selected {
+  border-color: rgba(79, 154, 255, 0.8);
+  background: rgba(79, 154, 255, 0.25);
+}
+
+.trainer-json-wrap {
+  min-width: 0;
+}
+
+.trainer-live-card p {
+  margin: 4px 0;
+}
+
+.trainer-live-board-shell {
+  margin: 8px auto 0;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 10, 17, 0.95);
+}
+
+.trainer-live-full-board {
+  width: auto;
+  height: auto;
+  --cell-size: 11px;
+  --cell-gap: 1px;
+}
+
+@media (max-width: 1080px) {
+  .trainer-best-preview {
+    grid-template-columns: 1fr;
+  }
 }
 
 .minmax-page {
