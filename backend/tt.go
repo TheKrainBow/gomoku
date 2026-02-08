@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -22,6 +23,7 @@ type TTEntry struct {
 	Score       int32
 	Flag        TTFlag
 	BestMove    Move
+	Hits        uint32
 	GenWritten  uint32
 	GenLastUsed uint32
 	Valid       bool
@@ -132,6 +134,7 @@ func (tt *TranspositionTable) Probe(key uint64) (TTEntry, bool) {
 		if !entry.Valid || entry.Key != key {
 			continue
 		}
+		entry.Hits++
 		entry.GenLastUsed = gen
 		tt.entries[idx] = entry
 		return entry, true
@@ -163,6 +166,7 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 			Score:       score,
 			Flag:        flag,
 			BestMove:    best,
+			Hits:        0,
 			GrowLeft:    clampToUint8(meta.GrowLeft),
 			GrowRight:   clampToUint8(meta.GrowRight),
 			GrowTop:     clampToUint8(meta.GrowTop),
@@ -191,6 +195,7 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 			Score:       score,
 			Flag:        flag,
 			BestMove:    best,
+			Hits:        0,
 			GrowLeft:    clampToUint8(meta.GrowLeft),
 			GrowRight:   clampToUint8(meta.GrowRight),
 			GrowTop:     clampToUint8(meta.GrowTop),
@@ -235,11 +240,67 @@ func (tt *TranspositionTable) Store(key uint64, depth int, value float64, flag T
 		Score:       score,
 		Flag:        flag,
 		BestMove:    best,
+		Hits:        0,
 		GenWritten:  gen,
 		GenLastUsed: gen,
 		Valid:       true,
 	}
 	return true, false
+}
+
+func (tt *TranspositionTable) DeleteByKey(key uint64) bool {
+	stripe := tt.stripeIndexForKey(key)
+	tt.stripeLocks[stripe].Lock()
+	defer tt.stripeLocks[stripe].Unlock()
+	start := tt.bucketIndex(key)
+	deleted := false
+	for i := 0; i < tt.buckets; i++ {
+		idx := start + i
+		entry := tt.entries[idx]
+		if !entry.Valid || entry.Key != key {
+			continue
+		}
+		tt.entries[idx] = TTEntry{}
+		deleted = true
+	}
+	return deleted
+}
+
+func (tt *TranspositionTable) TopEntriesByHits(offset int, limit int) ([]TTEntry, int) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	entries := tt.snapshotEntries()
+	valid := make([]TTEntry, 0, len(entries))
+	for i := range entries {
+		if entries[i].Valid {
+			valid = append(valid, entries[i])
+		}
+	}
+	sort.Slice(valid, func(i, j int) bool {
+		if valid[i].Hits != valid[j].Hits {
+			return valid[i].Hits > valid[j].Hits
+		}
+		if valid[i].Depth != valid[j].Depth {
+			return valid[i].Depth > valid[j].Depth
+		}
+		if valid[i].GenLastUsed != valid[j].GenLastUsed {
+			return valid[i].GenLastUsed > valid[j].GenLastUsed
+		}
+		return valid[i].Key < valid[j].Key
+	})
+	total := len(valid)
+	if offset >= total {
+		return []TTEntry{}, total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return valid[offset:end], total
 }
 
 func (tt *TranspositionTable) Count() int {

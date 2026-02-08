@@ -181,3 +181,288 @@
 [2026-02-07 17:01:30] 5 boards still in queue..
 [2026-02-07 17:01:40] 4 boards still in queue..
 [2026-02-07 17:01:42] 2 boards still in queue..
+[2026-02-08 16:23:04] AI trainer started. backend=http://host.docker.internal:8080 poll_interval=2s
+[2026-02-08 16:23:04] Started a game
+[2026-02-08 16:23:04] Waiting the game to finish...
+[2026-02-08 16:23:10] Game is over.
+[2026-02-08 16:23:10] Waiting the analyze queue to be empty...
+[2026-02-08 16:23:10] 7 boards still in queue..
+[2026-02-08 16:23:12] 4 boards still in queue..
+[2026-02-08 16:23:16] 2 boards still in queue..
+[2026-02-08 16:23:28] Queue is empty.
+[2026-02-08 16:23:28] Boards sent to analyze this game: 6 (total: 6)
+[2026-02-08 16:23:28] Started a game
+[2026-02-08 16:23:28] Waiting the game to finish...
+[2026-02-08 16:23:58] Game is over.
+[2026-02-08 16:23:58] Waiting the analyze queue to be empty...
+[2026-02-08 16:23:58] 49 boards still in queue..
+[2026-02-08 16:24:00] 48 boards still in queue..
+[2026-02-08 16:24:02] 47 boards still in queue..
+[2026-02-08 16:24:04] 45 boards still in queue..
+[2026-02-08 16:24:06] 44 boards still in queue..
+[2026-02-08 16:24:08] 43 boards still in queue..
+[2026-02-08 16:24:10] 42 boards still in queue..
+[2026-02-08 16:24:12] 41 boards still in queue..
+[2026-02-08 16:24:14] 40 boards still in queue..
+[2026-02-08 16:24:18] 39 boards still in queue..
+[2026-02-08 16:24:20] 35 boards still in queue..
+[2026-02-08 16:24:24] 34 boards still in queue..
+[2026-02-08 16:24:40] 33 boards still in queue..
+[2026-02-08 16:24:42] 32 boards still in queue..
+[2026-02-08 16:25:06] 30 boards still in queue..
+[2026-02-08 16:25:24] 28 boards still in queue..
+[2026-02-08 16:25:27] 25 boards still in queue..
+[2026-02-08 16:25:37] 24 boards still in queue..
+[2026-02-08 16:25:43] 23 boards still in queue..
+[2026-02-08 16:25:53] 22 boards still in queue..
+[2026-02-08 16:25:59] 21 boards still in queue..
+[2026-02-08 16:26:05] 19 boards still in queue..
+[2026-02-08 16:26:09] 17 boards still in queue..
+[2026-02-08 16:26:11] 15 boards still in queue..
+[2026-02-08 16:26:13] 12 boards still in queue..
+[2026-02-08 16:26:15] 11 boards still in queue..
+[2026-02-08 16:26:17] 10 boards still in queue..
+[2026-02-08 16:26:19] 9 boards still in queue..
+[2026-02-08 16:26:23] 8 boards still in queue..
+[2026-02-08 16:26:25] 7 boards still in queue..
+[2026-02-08 16:26:31] 6 boards still in queue..
+[2026-02-08 16:26:41] 5 boards still in queue..
+[2026-02-08 16:26:43] 4 boards still in queue..
+[2026-02-08 16:26:53] 3 boards still in queue..
+[2026-02-08 16:27:05] 1 boards still in queue..
+[2026-02-08 16:27:07] Queue is empty.
+[2026-02-08 16:27:07] Boards sent to analyze this game: 49 (total: 55)
+[2026-02-08 16:27:07] Started a game
+[2026-02-08 16:27:07] Waiting the game to finish...
+[2026-02-08 16:27:23] Game is over.
+[2026-02-08 16:27:23] Waiting the analyze queue to be empty...
+[2026-02-08 16:27:23] 29 boards still in queue..
+[2026-02-08 16:27:25] 28 boards still in queue..
+[2026-02-08 16:27:27] 25 boards still in queue..
+[2026-02-08 16:27:33] 23 boards still in queue..
+[2026-02-08 16:27:35] 22 boards still in queue..
+[2026-02-08 16:27:43] 21 boards still in queue..
+[2026-02-08 16:27:45] 20 boards still in queue..
+[2026-02-08 16:27:47] 18 boards still in queue..
+[2026-02-08 16:27:49] 14 boards still in queue..
+[2026-02-08 16:27:55] 13 boards still in queue..
+[2026-02-08 16:27:59] 12 boards still in queue..
+[2026-02-08 16:28:01] 11 boards still in queue..
+[2026-02-08 16:28:03] 9 boards still in queue..
+[2026-02-08 16:28:05] 8 boards still in queue..
+[2026-02-08 16:28:17] 7 boards still in queue..
+[2026-02-08 16:28:23] 6 boards still in queue..
+[2026-02-08 16:28:35] 5 boards still in queue..
+[2026-02-08 16:28:49] 3 boards still in queue..
+[2026-02-08 16:28:57] 2 boards still in queue..
+[2026-02-08 16:29:10] 1 boards still in queue..
+[2026-02-08 16:29:26] Queue is empty.
+[2026-02-08 16:29:26] Boards sent to analyze this game: 29 (total: 84)
+[2026-02-08 16:29:26] Started a game
+[2026-02-08 16:29:26] Waiting the game to finish...
+[2026-02-08 16:29:42] Game is over.
+[2026-02-08 16:29:42] Waiting the analyze queue to be empty...
+[2026-02-08 16:29:42] 18 boards still in queue..
+[2026-02-08 16:29:44] 17 boards still in queue..
+[2026-02-08 16:29:46] 15 boards still in queue..
+[2026-02-08 16:29:52] 14 boards still in queue..
+[2026-02-08 16:29:54] 12 boards still in queue..
+[2026-02-08 16:30:00] 11 boards still in queue..
+[2026-02-08 16:30:02] 10 boards still in queue..
+[2026-02-08 16:30:06] 9 boards still in queue..
+[2026-02-08 16:30:08] 8 boards still in queue..
+[2026-02-08 16:30:12] 5 boards still in queue..
+[2026-02-08 16:30:24] 4 boards still in queue..
+[2026-02-08 16:30:38] 3 boards still in queue..
+[2026-02-08 16:30:50] 2 boards still in queue..
+[2026-02-08 16:30:52] Queue is empty.
+[2026-02-08 16:30:52] Boards sent to analyze this game: 18 (total: 102)
+[2026-02-08 16:30:52] Started a game
+[2026-02-08 16:30:52] Waiting the game to finish...
+[2026-02-08 16:31:14] Game is over.
+[2026-02-08 16:31:14] Waiting the analyze queue to be empty...
+[2026-02-08 16:31:14] 29 boards still in queue..
+[2026-02-08 16:31:16] 24 boards still in queue..
+[2026-02-08 16:31:18] 21 boards still in queue..
+[2026-02-08 16:31:20] 19 boards still in queue..
+[2026-02-08 16:31:22] 15 boards still in queue..
+[2026-02-08 16:31:28] 14 boards still in queue..
+[2026-02-08 16:31:30] 12 boards still in queue..
+[2026-02-08 16:31:36] 11 boards still in queue..
+[2026-02-08 16:31:38] 10 boards still in queue..
+[2026-02-08 16:31:42] 9 boards still in queue..
+[2026-02-08 16:31:54] 8 boards still in queue..
+[2026-02-08 16:32:00] 6 boards still in queue..
+[2026-02-08 16:32:02] 4 boards still in queue..
+[2026-02-08 16:32:08] 3 boards still in queue..
+[2026-02-08 16:32:20] 2 boards still in queue..
+[2026-02-08 16:32:24] 1 boards still in queue..
+[2026-02-08 16:32:26] Queue is empty.
+[2026-02-08 16:32:26] Boards sent to analyze this game: 29 (total: 131)
+[2026-02-08 16:32:26] Started a game
+[2026-02-08 16:32:26] Waiting the game to finish...
+[2026-02-08 16:32:53] Game is over.
+[2026-02-08 16:32:53] Waiting the analyze queue to be empty...
+[2026-02-08 16:32:53] 40 boards still in queue..
+[2026-02-08 16:33:01] 38 boards still in queue..
+[2026-02-08 16:33:13] 36 boards still in queue..
+[2026-02-08 16:33:17] 35 boards still in queue..
+[2026-02-08 16:33:19] 33 boards still in queue..
+[2026-02-08 16:33:23] 31 boards still in queue..
+[2026-02-08 16:33:29] 30 boards still in queue..
+[2026-02-08 16:33:31] 26 boards still in queue..
+[2026-02-08 16:33:33] 23 boards still in queue..
+[2026-02-08 16:33:37] 22 boards still in queue..
+[2026-02-08 16:33:39] 21 boards still in queue..
+[2026-02-08 16:33:43] 20 boards still in queue..
+[2026-02-08 16:33:45] 19 boards still in queue..
+[2026-02-08 16:33:59] 18 boards still in queue..
+[2026-02-08 16:34:07] 17 boards still in queue..
+[2026-02-08 16:34:11] 16 boards still in queue..
+[2026-02-08 16:34:23] 15 boards still in queue..
+[2026-02-08 16:34:25] 14 boards still in queue..
+[2026-02-08 16:34:37] 13 boards still in queue..
+[2026-02-08 16:34:43] 12 boards still in queue..
+[2026-02-08 16:34:45] 11 boards still in queue..
+[2026-02-08 16:34:47] 10 boards still in queue..
+[2026-02-08 16:34:51] 8 boards still in queue..
+[2026-02-08 16:34:53] 7 boards still in queue..
+[2026-02-08 16:34:55] 6 boards still in queue..
+[2026-02-08 16:34:57] 5 boards still in queue..
+[2026-02-08 16:34:59] 4 boards still in queue..
+[2026-02-08 16:35:03] 3 boards still in queue..
+[2026-02-08 16:35:07] 2 boards still in queue..
+[2026-02-08 16:35:09] Queue is empty.
+[2026-02-08 16:35:09] Boards sent to analyze this game: 40 (total: 171)
+[2026-02-08 16:35:09] Started a game
+[2026-02-08 16:35:09] Waiting the game to finish...
+[2026-02-08 16:35:19] Game is over.
+[2026-02-08 16:35:19] Waiting the analyze queue to be empty...
+[2026-02-08 16:35:19] 9 boards still in queue..
+[2026-02-08 16:35:21] 8 boards still in queue..
+[2026-02-08 16:35:23] 7 boards still in queue..
+[2026-02-08 16:35:25] 5 boards still in queue..
+[2026-02-08 16:35:27] 3 boards still in queue..
+[2026-02-08 16:35:31] 2 boards still in queue..
+[2026-02-08 16:35:33] Queue is empty.
+[2026-02-08 16:35:33] Boards sent to analyze this game: 9 (total: 180)
+[2026-02-08 16:35:33] Started a game
+[2026-02-08 16:35:33] Waiting the game to finish...
+[2026-02-08 16:35:55] Game is over.
+[2026-02-08 16:35:55] Waiting the analyze queue to be empty...
+[2026-02-08 16:35:55] 35 boards still in queue..
+[2026-02-08 16:35:59] 33 boards still in queue..
+[2026-02-08 16:36:08] 31 boards still in queue..
+[2026-02-08 16:36:10] 28 boards still in queue..
+[2026-02-08 16:36:12] 26 boards still in queue..
+[2026-02-08 16:36:22] 24 boards still in queue..
+[2026-02-08 16:36:28] 23 boards still in queue..
+[2026-02-08 16:36:30] 22 boards still in queue..
+[2026-02-08 16:36:36] 20 boards still in queue..
+[2026-02-08 16:36:42] 18 boards still in queue..
+[2026-02-08 16:36:44] 17 boards still in queue..
+[2026-02-08 16:36:46] 14 boards still in queue..
+[2026-02-08 16:36:48] 13 boards still in queue..
+[2026-02-08 16:36:52] 9 boards still in queue..
+[2026-02-08 16:36:54] 7 boards still in queue..
+[2026-02-08 16:36:56] 4 boards still in queue..
+[2026-02-08 16:37:00] 3 boards still in queue..
+[2026-02-08 16:37:04] 1 boards still in queue..
+[2026-02-08 16:37:06] Queue is empty.
+[2026-02-08 16:37:06] Boards sent to analyze this game: 35 (total: 215)
+[2026-02-08 16:37:06] Started a game
+[2026-02-08 16:37:06] Waiting the game to finish...
+[2026-02-08 16:37:24] Game is over.
+[2026-02-08 16:37:24] Waiting the analyze queue to be empty...
+[2026-02-08 16:37:24] 20 boards still in queue..
+[2026-02-08 16:37:26] 17 boards still in queue..
+[2026-02-08 16:37:28] 14 boards still in queue..
+[2026-02-08 16:37:30] 12 boards still in queue..
+[2026-02-08 16:37:32] 10 boards still in queue..
+[2026-02-08 16:37:34] 7 boards still in queue..
+[2026-02-08 16:37:38] 2 boards still in queue..
+[2026-02-08 16:37:40] Queue is empty.
+[2026-02-08 16:37:40] Boards sent to analyze this game: 20 (total: 235)
+[2026-02-08 16:37:40] Started a game
+[2026-02-08 16:37:40] Waiting the game to finish...
+[2026-02-08 16:38:00] Game is over.
+[2026-02-08 16:38:00] Waiting the analyze queue to be empty...
+[2026-02-08 16:38:00] 27 boards still in queue..
+[2026-02-08 16:38:02] 22 boards still in queue..
+[2026-02-08 16:38:04] 20 boards still in queue..
+[2026-02-08 16:38:06] 19 boards still in queue..
+[2026-02-08 16:38:10] 18 boards still in queue..
+[2026-02-08 16:38:16] 17 boards still in queue..
+[2026-02-08 16:38:20] 16 boards still in queue..
+[2026-02-08 16:38:22] 15 boards still in queue..
+[2026-02-08 16:38:24] 14 boards still in queue..
+[2026-02-08 16:38:26] 13 boards still in queue..
+[2026-02-08 16:38:28] 12 boards still in queue..
+[2026-02-08 16:38:40] 11 boards still in queue..
+[2026-02-08 16:38:48] 7 boards still in queue..
+[2026-02-08 16:38:52] 5 boards still in queue..
+[2026-02-08 16:38:56] 3 boards still in queue..
+[2026-02-08 16:38:58] Queue is empty.
+[2026-02-08 16:38:58] Boards sent to analyze this game: 27 (total: 262)
+[2026-02-08 16:38:58] Started a game
+[2026-02-08 16:38:58] Waiting the game to finish...
+[2026-02-08 16:39:10] Game is over.
+[2026-02-08 16:39:10] Waiting the analyze queue to be empty...
+[2026-02-08 16:39:10] 13 boards still in queue..
+[2026-02-08 16:39:14] 9 boards still in queue..
+[2026-02-08 16:39:16] 7 boards still in queue..
+[2026-02-08 16:39:18] 6 boards still in queue..
+[2026-02-08 16:39:20] 5 boards still in queue..
+[2026-02-08 16:39:22] 4 boards still in queue..
+[2026-02-08 16:39:24] 2 boards still in queue..
+[2026-02-08 16:39:26] 1 boards still in queue..
+[2026-02-08 16:39:33] Queue is empty.
+[2026-02-08 16:39:33] Boards sent to analyze this game: 13 (total: 275)
+[2026-02-08 16:39:33] Started a game
+[2026-02-08 16:39:33] Waiting the game to finish...
+[2026-02-08 16:39:41] Game is over.
+[2026-02-08 16:39:41] Waiting the analyze queue to be empty...
+[2026-02-08 16:39:41] Queue is empty.
+[2026-02-08 16:39:41] Boards sent to analyze this game: 0 (total: 275)
+[2026-02-08 16:39:41] No new boards were generated by the last game. Stopping trainer to avoid spam.
+[2026-02-08 16:39:41] Trainer stopped cleanly. Total boards sent to analyze: 275
+[2026-02-08 16:49:31] AI trainer started. backend=http://host.docker.internal:8080 poll_interval=2s
+[2026-02-08 16:49:31] Started a game
+[2026-02-08 16:49:31] Waiting the game to finish...
+[2026-02-08 16:49:41] Game is over.
+[2026-02-08 16:49:41] Waiting the analyze queue to be empty...
+[2026-02-08 16:49:41] 9 boards still in queue..
+[2026-02-08 16:49:43] 7 boards still in queue..
+[2026-02-08 16:49:45] 4 boards still in queue..
+[2026-02-08 16:49:51] 3 boards still in queue..
+[2026-02-08 16:49:59] Queue is empty.
+[2026-02-08 16:49:59] Boards sent to analyze this game: 8 (total: 8)
+[2026-02-08 16:49:59] Started a game
+[2026-02-08 16:49:59] Waiting the game to finish...
+[2026-02-08 16:50:11] Game is over.
+[2026-02-08 16:50:11] Waiting the analyze queue to be empty...
+[2026-02-08 16:50:11] 11 boards still in queue..
+[2026-02-08 16:50:13] 9 boards still in queue..
+[2026-02-08 16:50:15] 8 boards still in queue..
+[2026-02-08 16:50:19] 5 boards still in queue..
+[2026-02-08 16:50:21] 4 boards still in queue..
+[2026-02-08 16:50:25] Queue is empty.
+[2026-02-08 16:50:25] Boards sent to analyze this game: 11 (total: 19)
+[2026-02-08 16:50:25] Started a game
+[2026-02-08 16:50:25] Waiting the game to finish...
+[2026-02-08 16:50:36] Game is over.
+[2026-02-08 16:50:36] Waiting the analyze queue to be empty...
+[2026-02-08 16:50:36] 1 boards still in queue..
+[2026-02-08 16:50:38] Queue is empty.
+[2026-02-08 16:50:38] Boards sent to analyze this game: 1 (total: 20)
+[2026-02-08 16:50:38] Started a game
+[2026-02-08 16:50:38] Waiting the game to finish...
+[2026-02-08 16:50:58] AI trainer started. backend=http://host.docker.internal:8080 poll_interval=2s
+[2026-02-08 16:50:58] Started a game
+[2026-02-08 16:50:58] Waiting the game to finish...
+[2026-02-08 16:51:05] Game is over.
+[2026-02-08 16:51:05] Waiting the analyze queue to be empty...
+[2026-02-08 16:51:05] Queue is empty.
+[2026-02-08 16:51:05] Boards sent to analyze this game: 0 (total: 0)
+[2026-02-08 16:51:05] No new boards were generated by the last game. Stopping trainer to avoid spam.
+[2026-02-08 16:51:05] Trainer stopped cleanly. Total boards sent to analyze: 0

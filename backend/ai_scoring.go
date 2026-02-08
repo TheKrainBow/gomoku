@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -609,6 +610,9 @@ func ensureTT(cache *AISearchCache, config Config) *TranspositionTable {
 	if cache == nil {
 		return nil
 	}
+	if config.AiTtSize <= 0 && config.AiTtMaxEntries <= 0 {
+		return nil
+	}
 	if config.AiTtSize <= 0 {
 		config.AiTtSize = int(config.AiTtMaxEntries)
 	}
@@ -619,6 +623,26 @@ func ensureTT(cache *AISearchCache, config Config) *TranspositionTable {
 	if buckets <= 0 {
 		buckets = 2
 	}
+	if config.AiTtMaxMemoryBytes > 0 {
+		entryBytes := int64(unsafe.Sizeof(TTEntry{}))
+		if entryBytes <= 0 {
+			entryBytes = 1
+		}
+		maxEntriesByMemory := int(config.AiTtMaxMemoryBytes / entryBytes)
+		if maxEntriesByMemory < 1 {
+			maxEntriesByMemory = 1
+		}
+		maxSizeByMemory := maxEntriesByMemory / buckets
+		if maxSizeByMemory < 1 {
+			maxSizeByMemory = 1
+		}
+		if config.AiTtSize > maxSizeByMemory {
+			config.AiTtSize = floorPowerOfTwo(maxSizeByMemory)
+			if config.AiTtSize < 1 {
+				config.AiTtSize = 1
+			}
+		}
+	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if cache.TT == nil || cache.TTSize != config.AiTtSize || cache.TTBuckets != buckets {
@@ -627,6 +651,17 @@ func ensureTT(cache *AISearchCache, config Config) *TranspositionTable {
 		cache.TTBuckets = buckets
 	}
 	return cache.TT
+}
+
+func floorPowerOfTwo(value int) int {
+	if value < 1 {
+		return 1
+	}
+	pow := 1
+	for pow <= value/2 {
+		pow <<= 1
+	}
+	return pow
 }
 
 func ensureEvalCache(cache *AISearchCache, config Config) *EvalCache {
@@ -1676,7 +1711,7 @@ func newMinimaxContext(rules Rules, settings AIScoreSettings, start time.Time) m
 		logIndent: 0,
 	}
 	if settings.Config.AiTimeBudgetMs > 0 {
-		ctx.deadline = start.Add(time.Duration(settings.Config.AiTimeBudgetMs) * time.Millisecond)
+		ctx.deadline = start.Add(time.Duration(settings.Config.AiTimeBudgetMs-100) * time.Millisecond)
 		ctx.hasDeadline = true
 	}
 	return ctx

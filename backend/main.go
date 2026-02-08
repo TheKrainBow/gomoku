@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -87,49 +90,44 @@ type settingsPayload struct {
 	Config   Config          `json:"config"`
 }
 
-type analyseMove struct {
-	X     int     `json:"x"`
-	Y     int     `json:"y"`
-	Score float64 `json:"score"`
-	Depth int     `json:"depth"`
-	Valid bool    `json:"valid"`
-}
-
-type analyseResponse struct {
-	BestMove        analyseMove `json:"best_move"`
-	DepthUsed       int         `json:"depth_used"`
-	DurationMs      int64       `json:"duration_ms"`
-	Nodes           int64       `json:"nodes"`
-	HeuristicCalls  int64       `json:"heuristic_calls"`
-	HeuristicTimeMs int64       `json:"heuristic_time_ms"`
-	AvgHeuristicMs  float64     `json:"avg_heuristic_ms"`
-	BoardGenTimeMs  int64       `json:"board_gen_time_ms"`
-	BoardGenOps     int64       `json:"board_gen_ops"`
-	TTProbes        int64       `json:"tt_probes"`
-	TTHits          int64       `json:"tt_hits"`
-	TTExactHits     int64       `json:"tt_exact_hits"`
-	TTLowerHits     int64       `json:"tt_lower_hits"`
-	TTUpperHits     int64       `json:"tt_upper_hits"`
-	TTStores        int64       `json:"tt_stores"`
-	TTOverwrites    int64       `json:"tt_overwrites"`
-	TTReplacements  int64       `json:"tt_replacements"`
-	Cutoffs         int64       `json:"cutoffs"`
-	TTCutoffs       int64       `json:"tt_cutoffs"`
-	ABCutoffs       int64       `json:"ab_cutoffs"`
-}
-
-type analyseRequest struct {
-	Board        [][]int `json:"board"`
-	Depth        int     `json:"depth"`
-	NextPlayer   int     `json:"next_player"`
-	UseTempCache bool    `json:"use_temp_cache"`
-}
-
 type ttCacheStatusResponse struct {
-	Count    int     `json:"count"`
-	Capacity int     `json:"capacity"`
-	Usage    float64 `json:"usage"`
-	Full     bool    `json:"full"`
+	Count          int     `json:"count"`
+	Capacity       int     `json:"capacity"`
+	Usage          float64 `json:"usage"`
+	Full           bool    `json:"full"`
+	EntryBytes     uint64  `json:"entry_bytes"`
+	UsedBytes      uint64  `json:"used_bytes"`
+	CapacityBytes  uint64  `json:"capacity_bytes"`
+	MaxMemoryBytes uint64  `json:"max_memory_bytes"`
+	MemoryUsage    float64 `json:"memory_usage"`
+}
+
+type ttCacheEntryDTO struct {
+	Hash        string `json:"hash"`
+	Hits        uint32 `json:"hits"`
+	Depth       int    `json:"depth"`
+	Score       int32  `json:"score"`
+	Flag        string `json:"flag"`
+	BestMove    Move   `json:"best_move"`
+	GenWritten  uint32 `json:"gen_written"`
+	GenLastUsed uint32 `json:"gen_last_used"`
+	GrowthLeft  uint8  `json:"growth_left"`
+	GrowthRight uint8  `json:"growth_right"`
+	GrowthTop   uint8  `json:"growth_top"`
+	GrowthBot   uint8  `json:"growth_bottom"`
+	HitLeft     bool   `json:"hit_left"`
+	HitRight    bool   `json:"hit_right"`
+	HitTop      bool   `json:"hit_top"`
+	HitBottom   bool   `json:"hit_bottom"`
+	FrameW      uint8  `json:"frame_w"`
+	FrameH      uint8  `json:"frame_h"`
+}
+
+type ttCacheEntriesResponse struct {
+	Items  []ttCacheEntryDTO `json:"items"`
+	Offset int               `json:"offset"`
+	Limit  int               `json:"limit"`
+	Total  int               `json:"total"`
 }
 
 func main() {
@@ -235,7 +233,6 @@ func main() {
 		if payload.Config != nil {
 			configStore.Update(*payload.Config)
 			controller.ResetForConfigChange()
-			FlushGlobalCaches()
 		}
 		if payload.Settings != nil {
 			settings := settingsFromDTO(*payload.Settings, controller.Settings())
@@ -267,9 +264,6 @@ func main() {
 		writeJSON(w, http.StatusOK, controllerStatus(controller))
 	})
 
-	r.Post("/api/analyse", func(w http.ResponseWriter, r *http.Request) {
-		handleAnalyseRequest(w, r)
-	})
 	r.Get("/api/analitics/queue", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, analiticsQueueResponse{
 			Queue:        searchBacklogManager.TopAnaliticsQueue(analiticsTopBoardsLimit()),
@@ -278,6 +272,40 @@ func main() {
 	})
 	r.Get("/api/cache/tt", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ttCacheStatus())
+	})
+	r.Get("/api/cache/tt/entries", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 10
+		}
+		if limit > 100 {
+			limit = 100
+		}
+		if offset < 0 {
+			offset = 0
+		}
+		writeJSON(w, http.StatusOK, ttCacheEntries(offset, limit))
+	})
+	r.Delete("/api/cache/tt/entries/{hash}", func(w http.ResponseWriter, r *http.Request) {
+		hashRaw := chi.URLParam(r, "hash")
+		hash, err := parseTTKey(hashRaw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid hash"})
+			return
+		}
+		config := GetConfig()
+		cache := SharedSearchCache()
+		tt := ensureTT(cache, config)
+		if tt == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"deleted": false, "hash": fmt.Sprintf("0x%016x", hash)})
+			return
+		}
+		deleted := tt.DeleteByKey(hash)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"deleted": deleted,
+			"hash":    fmt.Sprintf("0x%016x", hash),
+		})
 	})
 
 	r.Get("/ws/", func(w http.ResponseWriter, r *http.Request) {
@@ -526,153 +554,115 @@ func historyToDTO(history MoveHistory) []historyEntryDTO {
 	return result
 }
 
-func handleAnalyseRequest(w http.ResponseWriter, r *http.Request) {
-	var payload analyseRequest
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
-		return
-	}
-	boardSize := len(payload.Board)
-	if boardSize == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board required"})
-		return
-	}
-	if boardSize < 3 || boardSize > 25 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board size must be 3-25"})
-		return
-	}
-	for _, row := range payload.Board {
-		if len(row) != boardSize {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board must be square"})
-			return
-		}
-	}
-
-	if payload.Depth <= 0 {
-		payload.Depth = 1
-	}
-	config := GetConfig()
-	maxDepth := config.AiMaxDepth
-	if maxDepth <= 0 {
-		maxDepth = payload.Depth
-	}
-	if payload.Depth > maxDepth {
-		payload.Depth = maxDepth
-	}
-
-	settings := DefaultGameSettings()
-	settings.BoardSize = boardSize
-	state := GameState{Board: NewBoard(boardSize)}
-	for y, row := range payload.Board {
-		for x, value := range row {
-			state.Board.Set(x, y, intToCell(value))
-		}
-	}
-	state.ToMove = intToPlayer(payload.NextPlayer)
-	state.Status = StatusRunning
-	state.HasLastMove = false
-	state.LastMove = Move{X: -1, Y: -1}
-	state.CapturedBlack = 0
-	state.CapturedWhite = 0
-	state.MustCapture = false
-	state.ForcedCaptureMoves = nil
-	state.LastMessage = ""
-	state.WinningLine = nil
-	state.WinningCapturePair = nil
-	state.recomputeHashes()
-
-	rules := NewRules(settings)
-	stats := &SearchStats{Start: time.Now()}
-	config.AiDepth = payload.Depth
-	if !payload.UseTempCache {
-		unlock := lockDefaultCache()
-		defer unlock()
-	}
-	cache := SharedSearchCache()
-	var tempCache AISearchCache
-	if payload.UseTempCache {
-		tempCache = newAISearchCache()
-		cache = &tempCache
-	}
-	analysisSettings := AIScoreSettings{
-		Depth:           payload.Depth,
-		TimeoutMs:       0,
-		BoardSize:       boardSize,
-		Player:          state.ToMove,
-		Cache:           cache,
-		Config:          config,
-		Stats:           stats,
-		DirectDepthOnly: true,
-	}
-	scores := ScoreBoard(state, rules, analysisSettings)
-	bestMove, ok := bestMoveFromScores(scores, state, rules, analysisSettings.BoardSize)
-	if ok {
-		if lostModeMove, changed := maybeSelectLostModeMove(scores, state, rules, analysisSettings, bestMove); changed {
-			bestMove = lostModeMove
-		}
-	}
-	best := analyseMove{}
-	if ok {
-		score := scores[bestMove.Y*analysisSettings.BoardSize+bestMove.X]
-		best = analyseMove{
-			X:     bestMove.X,
-			Y:     bestMove.Y,
-			Score: score,
-			Depth: bestMove.Depth,
-			Valid: true,
-		}
-	}
-	durationMs := time.Since(stats.Start).Milliseconds()
-	avgHeuristic := 0.0
-	if stats.HeuristicCalls > 0 {
-		avgHeuristic = float64(stats.HeuristicTime.Milliseconds()) / float64(stats.HeuristicCalls)
-	}
-	response := analyseResponse{
-		BestMove:        best,
-		DepthUsed:       stats.CompletedDepths,
-		DurationMs:      durationMs,
-		Nodes:           stats.Nodes,
-		HeuristicCalls:  stats.HeuristicCalls,
-		HeuristicTimeMs: stats.HeuristicTime.Milliseconds(),
-		AvgHeuristicMs:  avgHeuristic,
-		BoardGenTimeMs:  stats.BoardGenTime.Milliseconds(),
-		BoardGenOps:     stats.BoardGenOps,
-		TTProbes:        stats.TTProbes,
-		TTHits:          stats.TTHits,
-		TTExactHits:     stats.TTExactHits,
-		TTLowerHits:     stats.TTLowerHits,
-		TTUpperHits:     stats.TTUpperHits,
-		TTStores:        stats.TTStores,
-		TTOverwrites:    stats.TTOverwrites,
-		TTReplacements:  stats.TTReplacements,
-		Cutoffs:         stats.Cutoffs,
-		TTCutoffs:       stats.TTCutoffs,
-		ABCutoffs:       stats.ABCutoffs,
-	}
-	writeJSON(w, http.StatusOK, response)
-}
-
 func ttCacheStatus() ttCacheStatusResponse {
 	config := GetConfig()
 	cache := SharedSearchCache()
 	tt := ensureTT(cache, config)
+	maxMemoryBytes := uint64(0)
+	if config.AiTtMaxMemoryBytes > 0 {
+		maxMemoryBytes = uint64(config.AiTtMaxMemoryBytes)
+	}
 	if tt == nil {
-		return ttCacheStatusResponse{}
+		return ttCacheStatusResponse{
+			MaxMemoryBytes: maxMemoryBytes,
+		}
 	}
 	count := tt.Count()
 	capacity := tt.Capacity()
+	entryBytes := uint64(unsafe.Sizeof(TTEntry{}))
+	usedBytes := uint64(count) * entryBytes
+	capacityBytes := uint64(capacity) * entryBytes
 	usage := 0.0
+	memoryUsage := 0.0
 	full := false
 	if capacity > 0 {
 		usage = float64(count) / float64(capacity)
 		full = count >= capacity
 	}
-	return ttCacheStatusResponse{
-		Count:    count,
-		Capacity: capacity,
-		Usage:    usage,
-		Full:     full,
+	if maxMemoryBytes > 0 {
+		memoryUsage = float64(usedBytes) / float64(maxMemoryBytes)
+	} else if capacityBytes > 0 {
+		memoryUsage = float64(usedBytes) / float64(capacityBytes)
 	}
+	return ttCacheStatusResponse{
+		Count:          count,
+		Capacity:       capacity,
+		Usage:          usage,
+		Full:           full,
+		EntryBytes:     entryBytes,
+		UsedBytes:      usedBytes,
+		CapacityBytes:  capacityBytes,
+		MaxMemoryBytes: maxMemoryBytes,
+		MemoryUsage:    memoryUsage,
+	}
+}
+
+func ttCacheEntries(offset int, limit int) ttCacheEntriesResponse {
+	config := GetConfig()
+	cache := SharedSearchCache()
+	tt := ensureTT(cache, config)
+	if tt == nil {
+		return ttCacheEntriesResponse{
+			Items:  []ttCacheEntryDTO{},
+			Offset: offset,
+			Limit:  limit,
+			Total:  0,
+		}
+	}
+	entries, total := tt.TopEntriesByHits(offset, limit)
+	items := make([]ttCacheEntryDTO, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, ttEntryToDTO(entry))
+	}
+	return ttCacheEntriesResponse{
+		Items:  items,
+		Offset: offset,
+		Limit:  limit,
+		Total:  total,
+	}
+}
+
+func ttEntryToDTO(entry TTEntry) ttCacheEntryDTO {
+	return ttCacheEntryDTO{
+		Hash:        fmt.Sprintf("0x%016x", entry.Key),
+		Hits:        entry.Hits,
+		Depth:       entry.Depth,
+		Score:       entry.Score,
+		Flag:        ttFlagString(entry.Flag),
+		BestMove:    entry.BestMove,
+		GenWritten:  entry.GenWritten,
+		GenLastUsed: entry.GenLastUsed,
+		GrowthLeft:  entry.GrowLeft,
+		GrowthRight: entry.GrowRight,
+		GrowthTop:   entry.GrowTop,
+		GrowthBot:   entry.GrowBottom,
+		HitLeft:     entry.HitLeft,
+		HitRight:    entry.HitRight,
+		HitTop:      entry.HitTop,
+		HitBottom:   entry.HitBottom,
+		FrameW:      entry.FrameW,
+		FrameH:      entry.FrameH,
+	}
+}
+
+func ttFlagString(flag TTFlag) string {
+	switch flag {
+	case TTExact:
+		return "EXACT"
+	case TTLower:
+		return "LOWER"
+	case TTUpper:
+		return "UPPER"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+func parseTTKey(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, errors.New("empty")
+	}
+	return strconv.ParseUint(raw, 0, 64)
 }
 
 func historyEntryToDTO(entry HistoryEntry) historyEntryDTO {

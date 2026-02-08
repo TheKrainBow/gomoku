@@ -36,6 +36,18 @@ type AIPlayer struct {
 
 var moveRandomizer = rand.New(rand.NewSource(time.Now().UnixNano()))
 
+func liveAIConfig(config Config) Config {
+	if config.AiUseTtCache {
+		return config
+	}
+	adjusted := config
+	adjusted.AiTtSize = 0
+	adjusted.AiTtMaxEntries = 0
+	adjusted.AiEnableEvalCache = false
+	adjusted.AiEnableRootTranspose = false
+	return adjusted
+}
+
 func NewAIPlayer() *AIPlayer {
 	player := &AIPlayer{}
 	player.ponderCond = sync.NewCond(&player.ponderMu)
@@ -48,7 +60,7 @@ func (a *AIPlayer) IsHuman() bool {
 }
 
 func (a *AIPlayer) ChooseMove(state GameState, rules Rules) Move {
-	config := GetConfig()
+	config := liveAIConfig(GetConfig())
 	stats := &SearchStats{Start: time.Now()}
 	cache := SharedSearchCache()
 	settings := AIScoreSettings{
@@ -78,6 +90,7 @@ func (a *AIPlayer) StartThinking(state GameState, rules Rules, ghostSink func(Ga
 }
 
 func (a *AIPlayer) StartThinkingWithConfig(state GameState, rules Rules, ghostSink func(GameState), depthSink func(move Move, depth int, score float64), config Config) {
+	config = liveAIConfig(config)
 	if a.thinking.Load() {
 		return
 	}
@@ -228,7 +241,7 @@ func (a *AIPlayer) startPonderWorker() {
 			lastVersion = version
 			a.ponderMu.Unlock()
 
-			config := GetConfig()
+			config := liveAIConfig(GetConfig())
 			if !config.AiPonderingEnabled {
 				continue
 			}
@@ -515,7 +528,7 @@ func (a *AIPlayer) maybeDepthOneBackup(state GameState, rules Rules, scores []fl
 }
 
 func (a *AIPlayer) depthOneBackupMove(state GameState, rules Rules) (Move, bool) {
-	config := GetConfig()
+	config := liveAIConfig(GetConfig())
 	settings := AIScoreSettings{
 		Depth:            1,
 		TimeoutMs:        config.AiTimeoutMs,

@@ -6,8 +6,10 @@ const defaultStatus = {
     ghost_mode: true,
     log_depth_scores: false,
     ai_depth: 5,
+    ai_time_budget_ms: 400,
     ai_timeout_ms: 0,
-    ai_top_candidates: 6,
+    ai_use_tt_cache: true,
+    ai_min_depth: 3,
     ai_quick_win_exit: true,
     ai_tt_max_entries: 200000,
     ai_analitics_top_boards: 10
@@ -47,6 +49,16 @@ export default function App() {
   const [activeRightTab, setActiveRightTab] = useState('history')
   const [analiticsQueue, setAnaliticsQueue] = useState([])
   const [analiticsTotalInQueue, setAnaliticsTotalInQueue] = useState(0)
+  const [ttCache, setTtCache] = useState({
+    count: 0,
+    capacity: 0,
+    usage: 0,
+    full: false,
+    used_bytes: 0,
+    capacity_bytes: 0,
+    max_memory_bytes: 0,
+    memory_usage: 0
+  })
   const [analiticsNowMs, setAnaliticsNowMs] = useState(Date.now())
   const [turnNowMs, setTurnNowMs] = useState(Date.now())
   const [moveSuggestion, setMoveSuggestion] = useState(null)
@@ -56,8 +68,10 @@ export default function App() {
   const boardPanelRef = useRef(null)
   const historyListRef = useRef(null)
   const prevHistoryLenRef = useRef(0)
-  const pageRef = useRef(null)
   const analiticsRefreshBusyRef = useRef(false)
+  const autoSaveTimerRef = useRef(null)
+  const saveInFlightRef = useRef(false)
+  const queuedSettingsPayloadRef = useRef(null)
 
   const refreshAnaliticsQueue = async () => {
     if (analiticsRefreshBusyRef.current) {
@@ -77,6 +91,26 @@ export default function App() {
     }
   }
 
+  const refreshTtCache = async () => {
+    try {
+      const res = await fetch('/api/cache/tt')
+      if (!res.ok) {
+        return
+      }
+      const data = await res.json()
+      setTtCache({
+        count: data.count || 0,
+        capacity: data.capacity || 0,
+        usage: data.usage || 0,
+        full: Boolean(data.full),
+        used_bytes: data.used_bytes || 0,
+        capacity_bytes: data.capacity_bytes || 0,
+        max_memory_bytes: data.max_memory_bytes || 0,
+        memory_usage: data.memory_usage || 0
+      })
+    } catch (_) {}
+  }
+
   useEffect(() => {
     fetch('/api/ping')
       .then((res) => res.json())
@@ -91,6 +125,21 @@ export default function App() {
       .catch(() => {})
 
     refreshAnaliticsQueue().catch(() => {})
+    refreshTtCache().catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshTtCache().catch(() => {})
+    }, 2000)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => () => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
   }, [])
 
   useEffect(() => {
@@ -122,26 +171,6 @@ export default function App() {
       window.removeEventListener('resize', updateSize)
     }
   }, [status.board_size])
-
-  useEffect(() => {
-    const page = pageRef.current
-    if (!page) return
-
-    const updatePage = () => {
-      const rect = page.getBoundingClientRect()
-      document.documentElement.style.setProperty('--page-height', `${rect.height}px`)
-      document.documentElement.style.setProperty('--page-top', `${rect.top}px`)
-    }
-
-    updatePage()
-    const observer = new ResizeObserver(updatePage)
-    observer.observe(page)
-    window.addEventListener('resize', updatePage)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', updatePage)
-    }
-  }, [])
 
   useEffect(() => {
     const ws = new WebSocket(wsUrl('/ws/'))
@@ -423,6 +452,12 @@ export default function App() {
               (lastHistoryEntry.captured_positions || []).length > 0
             const restoredCapturedStone = isFinalCaptureWin && isWinningCaptureCell && cell === 0
             const renderedCell = restoredCapturedStone ? (status.winner === 1 ? 2 : 1) : cell
+            const isCaptureWinningMoveCell =
+              isFinalCaptureWin &&
+              lastHistoryEntry &&
+              lastHistoryEntry.x === colIndex &&
+              lastHistoryEntry.y === rowIndex &&
+              renderedCell !== 0
             const moveNumber = displayedSnapshot.moveNumbers[rowIndex][colIndex]
             const isSuggestionCell =
               showSuggestion &&
@@ -439,6 +474,8 @@ export default function App() {
                   ? 'winning-capture-target winning-capture-fade'
                   : 'winning-capture-target'
                 : ''
+            } ${isCaptureWinningMoveCell ? 'winning-capture-target winning-capture-fade' : ''} ${
+              isCaptureWinningMoveCell ? 'winning-capture-move' : ''
             } ${isSuggestionCell ? `ghost-suggestion ghost-player-${moveSuggestion.player}` : ''} ${
               isSuggestionCell ? 'ghost-suggestion-animated' : ''
             }`}
@@ -447,7 +484,7 @@ export default function App() {
             tabIndex={0}
             onClick={() => handleCellClick(colIndex, rowIndex)}
           >
-            {isSuggestionCell ? '' : renderedCell === 0 || restoredCapturedStone || moveNumber <= 0 ? '' : moveNumber}
+            {isSuggestionCell ? '' : renderedCell === 0 || moveNumber <= 0 ? '' : moveNumber}
           </div>
             )
           })()
@@ -558,48 +595,77 @@ export default function App() {
     }
   }
 
-  const handleSettingsChange = (field, value) => {
-    setStatus((prev) => ({
-      ...prev,
-      config: {
-        ...prev.config,
-        [field]: value
-      }
-    }))
-  }
-
-  const handleModeChange = (value) => {
-    setStatus((prev) => ({
-      ...prev,
-      settings: {
-        ...prev.settings,
-        mode: value,
-        human_player: value === 'ai_vs_human' ? prev.settings.human_player || 1 : 0
-      }
-    }))
-  }
-
-  const handleApplySettings = async () => {
-    if (settingsBusy) {
+  const flushQueuedSettings = async () => {
+    if (saveInFlightRef.current) {
       return
     }
+    const payload = queuedSettingsPayloadRef.current
+    if (!payload) {
+      return
+    }
+    queuedSettingsPayloadRef.current = null
+    saveInFlightRef.current = true
     setSettingsBusy(true)
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          settings: status.settings,
-          config: status.config
-        })
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
         const data = await res.json()
         setStatus(data)
       }
     } finally {
+      saveInFlightRef.current = false
       setSettingsBusy(false)
+      if (queuedSettingsPayloadRef.current) {
+        flushQueuedSettings()
+      }
     }
+  }
+
+  const queueAutoSave = (nextSettings, nextConfig) => {
+    queuedSettingsPayloadRef.current = {
+      settings: nextSettings,
+      config: nextConfig
+    }
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null
+      flushQueuedSettings()
+    }, 180)
+  }
+
+  const handleSettingsChange = (field, value) => {
+    setStatus((prev) => {
+      const next = {
+        ...prev,
+        config: {
+          ...prev.config,
+          [field]: value
+        }
+      }
+      queueAutoSave(next.settings, next.config)
+      return next
+    })
+  }
+
+  const handleModeChange = (value) => {
+    setStatus((prev) => {
+      const next = {
+        ...prev,
+        settings: {
+          ...prev.settings,
+          mode: value,
+          human_player: value === 'ai_vs_human' ? prev.settings.human_player || 1 : 0
+        }
+      }
+      queueAutoSave(next.settings, next.config)
+      return next
+    })
   }
 
   const handleStop = async () => {
@@ -645,15 +711,20 @@ export default function App() {
   }
 
   return (
-    <div className="page" ref={pageRef}>
+    <div className="page">
       <header className="app-header">
         <div>
           <h1>Gomoku</h1>
-          <p>Play on the built-in board, then visit /analyse for detailed stats.</p>
+          <p>Play on the built-in board.</p>
         </div>
-        <a className="analyse-link" href="/analyse">
-          Analyse board →
-        </a>
+        <div className="header-links">
+          <a className="cache-link" href="/cache">
+            TT cache
+          </a>
+          <a className="cache-link" href="/minmax">
+            Minmax demo
+          </a>
+        </div>
       </header>
       <div className="layout">
         <section className="panel settings-panel">
@@ -696,40 +767,24 @@ export default function App() {
                 />
               </label>
               <label>
-                Top candidates
-                <input
-                  type="number"
-                  min="1"
-                  value={status.config.ai_top_candidates}
-                  onChange={(event) => handleSettingsChange('ai_top_candidates', Number(event.target.value))}
-                />
-              </label>
-              <label>
                 Timeout (ms)
                 <input
                   type="number"
                   min="0"
-                  value={status.config.ai_timeout_ms}
-                  onChange={(event) => handleSettingsChange('ai_timeout_ms', Number(event.target.value))}
+                  value={status.config.ai_time_budget_ms ?? 0}
+                  onChange={(event) => handleSettingsChange('ai_time_budget_ms', Number(event.target.value))}
                 />
               </label>
               <label>
-                Cache size
-                <input
-                  type="number"
-                  min="0"
-                  value={status.config.ai_tt_max_entries}
-                  onChange={(event) => handleSettingsChange('ai_tt_max_entries', Number(event.target.value))}
+                TT cache usage
+                <progress
+                  value={ttCache.used_bytes}
+                  max={Math.max(1, ttCache.max_memory_bytes || ttCache.capacity_bytes || 1)}
                 />
-              </label>
-              <label>
-                Analitics boards sent
-                <input
-                  type="number"
-                  min="1"
-                  value={status.config.ai_analitics_top_boards}
-                  onChange={(event) => handleSettingsChange('ai_analitics_top_boards', Math.max(1, Number(event.target.value)))}
-                />
+                <div>
+                  {formatBytes(ttCache.used_bytes)} / {formatBytes(ttCache.max_memory_bytes || ttCache.capacity_bytes)} (
+                  {Math.round((ttCache.memory_usage || 0) * 100)}%)
+                </div>
               </label>
               <label className="toggle">
                 <input
@@ -742,24 +797,13 @@ export default function App() {
               <label className="toggle">
                 <input
                   type="checkbox"
-                  checked={status.config.ai_quick_win_exit}
-                  onChange={(event) => handleSettingsChange('ai_quick_win_exit', event.target.checked)}
+                  checked={status.config.ai_use_tt_cache ?? true}
+                  onChange={(event) => handleSettingsChange('ai_use_tt_cache', event.target.checked)}
                 />
-                Quick win exit
-              </label>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={status.config.log_depth_scores}
-                  onChange={(event) => handleSettingsChange('log_depth_scores', event.target.checked)}
-                />
-                Log depth scores
+                Use TT Cache
               </label>
             </div>
             <div className="actions">
-              <button type="button" onClick={handleApplySettings} disabled={settingsBusy}>
-                {settingsBusy ? 'Saving…' : 'Apply settings'}
-              </button>
               {status.status === 'running' ? (
                 <button type="button" className="danger" onClick={handleStop} disabled={startBusy}>
                   {startBusy ? 'Stopping…' : 'Stop game'}
@@ -912,7 +956,6 @@ function buildBoardSnapshot(history, size, upToIndex) {
       for (const captured of entry.captured_positions) {
         if (captured.y >= 0 && captured.y < size && captured.x >= 0 && captured.x < size) {
           board[captured.y][captured.x] = 0
-          moveNumbers[captured.y][captured.x] = 0
         }
       }
     }
@@ -960,4 +1003,19 @@ function formatTurnDuration(msValue) {
   const seconds = totalSeconds % 60
   const tenths = Math.floor((safe % 1000) / 100)
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0)
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let current = bytes / 1024
+  let idx = 0
+  while (current >= 1024 && idx < units.length - 1) {
+    current /= 1024
+    idx++
+  }
+  return `${current.toFixed(2)} ${units[idx]}`
 }

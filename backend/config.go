@@ -38,6 +38,8 @@ type Config struct {
 	AiTtSize              int             `json:"ai_tt_size"`
 	AiTtBuckets           int             `json:"ai_tt_buckets"`
 	AiTtUseSetAssoc       bool            `json:"ai_tt_use_set_assoc"`
+	AiUseTtCache          bool            `json:"ai_use_tt_cache"`
+	AiTtMaxMemoryBytes    int64           `json:"ai_tt_max_memory_bytes"`
 	AiEnableTtPersistence bool            `json:"ai_enable_tt_persistence"`
 	AiTtPersistencePath   string          `json:"ai_tt_persistence_path"`
 	AiEnableRootTranspose bool            `json:"ai_enable_root_transpose_tt"`
@@ -91,7 +93,7 @@ func DefaultConfig() Config {
 		LogDepthScores: false,
 
 		// Time budget mode
-		AiTimeBudgetMs:       400,
+		AiTimeBudgetMs:       500,
 		AiBacklogEstimateMs:  120000,
 		AiTimeoutMs:          0,
 		AiDepth:              10,
@@ -164,9 +166,11 @@ func DefaultConfig() Config {
 
 		// TT: slightly larger than 1<<18 helps a lot once you deepen regularly
 		AiTtUseSetAssoc:       true,
+		AiUseTtCache:          true,
 		AiTtBuckets:           4,
 		AiTtSize:              1 << 19, // 524288
 		AiTtMaxEntries:        0,
+		AiTtMaxMemoryBytes:    5 * 1024 * 1024 * 1024, // 5 GB
 		AiEnableTtPersistence: true,
 		AiTtPersistencePath:   "tt_cache.gob",
 		AiEnableRootTranspose: true,
@@ -188,16 +192,19 @@ func DefaultConfig() Config {
 		AiMinmaxCacheLimit: 1000,
 
 		Heuristics: HeuristicConfig{
-			Open4:        100000.0,
-			Closed4:      15000.0,
-			Broken4:      12000.0,
-			Open3:        2500.0,
-			Broken3:      2500.0,
-			Closed3:      300.0,
-			Open2:        200.0,
-			Broken2:      120.0,
-			ForkOpen3:    6000.0,
-			ForkFourPlus: 20000.0,
+			Open4:   100000.0,
+			Closed4: 25000.0,
+			Broken4: 18000.0,
+
+			Open3:   18000.0,
+			Broken3: 12000.0,
+			Closed3: 800.0,
+
+			Open2:   350.0,
+			Broken2: 220.0,
+
+			ForkOpen3:    45000.0,
+			ForkFourPlus: 120000.0,
 		},
 	}
 }
