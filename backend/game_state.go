@@ -1,0 +1,88 @@
+package main
+
+type PlayerColor int
+
+type GameStatus int
+
+const (
+	PlayerBlue PlayerColor = iota
+	PlayerRed
+)
+
+const (
+	StatusNotStarted GameStatus = iota
+	StatusRunning
+	StatusBlueWon
+	StatusRedWon
+	StatusDraw
+)
+
+type GameState struct {
+	Board              Board
+	ToMove             PlayerColor
+	Status             GameStatus
+	HasLastMove        bool
+	LastMove           Move
+	CapturedBlue      int
+	CapturedRed      int
+	Hash               uint64
+	HashSym            [8]uint64
+	CanonHash          uint64
+	MustCapture        bool
+	ForcedCaptureMoves []Move
+	LastMessage        string
+	WinningLine        []Move
+	WinningCapturePair []Move
+}
+
+func DefaultGameState(settings GameSettings) GameState {
+	state := GameState{}
+	state.Reset(settings)
+	return state
+}
+
+func (s *GameState) Reset(settings GameSettings) {
+	s.Board = NewBoard(settings.BoardSize)
+	if settings.BlueStarts {
+		s.ToMove = PlayerBlue
+	} else {
+		s.ToMove = PlayerRed
+	}
+	s.Status = StatusNotStarted
+	s.HasLastMove = false
+	s.LastMove = Move{X: -1, Y: -1}
+	s.CapturedBlue = 0
+	s.CapturedRed = 0
+	s.Hash = 0
+	s.HashSym = [8]uint64{}
+	s.CanonHash = 0
+	s.MustCapture = false
+	s.ForcedCaptureMoves = nil
+	s.LastMessage = ""
+	s.WinningLine = nil
+	s.WinningCapturePair = nil
+	s.recomputeHashes()
+}
+
+func (s GameState) Clone() GameState {
+	clone := s
+	clone.Board = s.Board.Clone()
+	clone.ForcedCaptureMoves = append([]Move(nil), s.ForcedCaptureMoves...)
+	clone.WinningLine = append([]Move(nil), s.WinningLine...)
+	clone.WinningCapturePair = append([]Move(nil), s.WinningCapturePair...)
+	return clone
+}
+
+func otherPlayer(player PlayerColor) PlayerColor {
+	if player == PlayerBlue {
+		return PlayerRed
+	}
+	return PlayerBlue
+}
+
+func (s *GameState) recomputeHashes() {
+	hash, sym := computeSymmetricHashes(*s)
+	s.Hash = hash
+	s.HashSym = sym
+	s.CanonHash = canonicalSymHash(sym)
+}

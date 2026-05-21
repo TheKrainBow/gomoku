@@ -1,0 +1,19 @@
+{
+  "open_4": 131633.82492556606,
+  "closed_4": 23451.264466845663,
+  "broken_4": 16588.885030052134,
+  "open_3": 19124.538397343695,
+  "broken_3": 11377.927833097501,
+  "closed_3": 802.1059657246053,
+  "open_2": 400.7080720328319,
+  "broken_2": 215.2849716438038,
+  "fork_open_3": 42035.40739524599,
+  "fork_four_plus": 130181.77247952914,
+  "capture_now": 2200,
+  "capture_double_threat": 2600,
+  "capture_near_win": 12000,
+  "capture_in_two": 700,
+  "hanging_pair": 2400,
+  "capture_win_soon_scale": 0.95,
+  "capture_in_two_limit": 8
+}

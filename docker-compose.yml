@@ -1,0 +1,96 @@
+services:
+  ai-trainer:
+    build:
+      context: ./ai-trainer
+      args:
+        LOCAL_UID: ${LOCAL_UID:-1000}
+        LOCAL_GID: ${LOCAL_GID:-1000}
+    container_name: gomoku-ai-trainer
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    volumes:
+      - ./logs:/logs
+    environment:
+      - BACKEND_URL=http://backend:8080
+      - POLL_INTERVAL_MS=2000
+      - TRAINER_API_ADDR=:8090
+      - TRAINER_MODE=heuristic
+      - TRAINER_AUTOSTART_MODE=
+      - TRAINER_AI_TIME_BUDGET_MS=700
+      - HEURISTIC_POPULATION_SIZE=8
+      - HEURISTIC_ELITE_COUNT=2
+      - HEURISTIC_HISTORICAL_POOL_SIZE=4
+      - HEURISTIC_TRAINING_OPENINGS=6
+      - HEURISTIC_VALIDATION_OPENINGS=4
+      - HEURISTIC_OPENING_PLIES=4
+      - HEURISTIC_ELO_K=20
+      - HEURISTIC_VALIDATION_PASS_RATE=0.52
+      - HEURISTIC_MATCHES_PER_ROUND=50
+      - HEURISTIC_MUTATION_STRENGTH=0.08
+      - HEURISTIC_GAME_TIMEOUT_SEC=180
+    networks:
+      - gomoku-net
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        LOCAL_UID: ${LOCAL_UID:-1000}
+        LOCAL_GID: ${LOCAL_GID:-1000}
+    container_name: gomoku-backend
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    restart: unless-stopped
+    volumes:
+      - ./logs:/logs
+      - backend_cache:/cache_logs
+    environment:
+      - GAME_TURN_LOG_DIR=/logs
+    networks:
+      - gomoku-net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        LOCAL_UID: ${LOCAL_UID:-1000}
+        LOCAL_GID: ${LOCAL_GID:-1000}
+    container_name: gomoku-frontend
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    networks:
+      - gomoku-net
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: gomoku-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - ai-trainer
+      - backend
+      - frontend
+    networks:
+      - gomoku-net
+
+networks:
+  gomoku-net:
+    driver: bridge
+
+volumes:
+  frontend_node_modules:
+  backend_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs/backend-cache
