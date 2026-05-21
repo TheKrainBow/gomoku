@@ -879,9 +879,7 @@ func backlogConfig(base Config) Config {
 	base.AiEnableTacticalK = false
 	base.AiEnableAspiration = false
 	base.AiEnableDynamicTopK = false
-	base.AiMaxCandidatesRoot = 8
-	base.AiMaxCandidatesMid = 4
-	base.AiMaxCandidatesDeep = 2
+	base.AiMaxCandidates = 8
 	return base
 }
 

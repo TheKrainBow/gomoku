@@ -104,7 +104,6 @@ type minimaxContext struct {
 	deadline       time.Time
 	hasDeadline    bool
 	logIndent      int
-	nullMoveActive bool // true during a null-move sub-search; prevents consecutive null moves
 }
 
 type mustBlockLogger struct {
@@ -450,10 +449,6 @@ type SearchStats struct {
 	PVSProxySoftWouldResearch  int64
 	PVSProxyHardSamples        int64
 	PVSProxyHardWouldResearch  int64
-	NMPAttempts                int64
-	NMPCutoffs                 int64
-	RFPAttempts                int64
-	RFPCutoffs                 int64
 	LMRReduced                 int64
 	LMRResearches              int64
 	TacticalQuiescenceCalls    int64
@@ -3274,7 +3269,7 @@ func sortRootMoveIndices(pool []RootMove, maximizing bool, pvMove *Move) []int {
 }
 
 func rootBasePrincipalLimit(config Config) int {
-	limit := config.AiMaxCandidatesRoot
+	limit := config.AiMaxCandidates
 	if limit <= 0 {
 		limit = 20
 	}
@@ -4424,8 +4419,8 @@ func hardPlyCandidateCap(config Config, depthFromRoot int) int {
 		}
 		return 16
 	default:
-		if config.AiMaxCandidatesRoot > 0 {
-			return config.AiMaxCandidatesRoot
+		if config.AiMaxCandidates > 0 {
+			return config.AiMaxCandidates
 		}
 		return 24
 	}
@@ -4469,12 +4464,8 @@ func candidateLimit(ctx minimaxContext, depthLeft, depthFromRoot int, tactical b
 		} else if config.AiKQuietDeep > 0 {
 			limit = config.AiKQuietDeep
 		}
-	} else if depthFromRoot == 0 && config.AiMaxCandidatesRoot > 0 {
-		limit = config.AiMaxCandidatesRoot
-	} else if depthLeft >= 3 && config.AiMaxCandidatesDeep > 0 {
-		limit = config.AiMaxCandidatesDeep
-	} else if config.AiMaxCandidatesMid > 0 {
-		limit = config.AiMaxCandidatesMid
+	} else if config.AiMaxCandidates > 0 {
+		limit = config.AiMaxCandidates
 	}
 
 	if depthFromRoot >= 9 && config.AiMaxCandidatesPly9 > 0 {
@@ -6530,11 +6521,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	if trace {
 		ttStart = time.Now()
 	}
-	// Null move searches must not probe the TT: the TT key does not encode whose turn
-	// it is (state.ToMove is not swapped), so regular-search entries at the same board
-	// position would be returned, giving scores from the wrong player's perspective
-	// and corrupting the null-move cutoff decision.
-	if tt != nil && !ctx.nullMoveActive {
+	if tt != nil {
 		if entry, ok := tt.Probe(boardHash, heuristicHash); ok {
 			if trace {
 				ttDuration := time.Since(ttStart).Milliseconds()
@@ -6658,99 +6645,6 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	bestRank := -1
 	quietNode := !forcedWinLine && !hardRestricted && !tactical
 
-	cfg := ctx.settings.Config
-
-	// winScoreHalf separates forced-win/loss sentinel values from heuristic scores.
-	// NMP and RFP must not fire when the window sits in sentinel territory:
-	// e.g. beta = -winScore at a MAX node makes any null search result >= beta
-	// (since -winScore is the score floor), so the prune fires unconditionally and
-	// incorrectly marks non-losing moves as forced losses.
-	const winScoreHalf = winScore / 2
-	normalWindow := (!maximizing || beta > -winScoreHalf) && (maximizing || alpha < winScoreHalf)
-
-	// Reverse Futility Pruning: at shallow quiet nodes compute one static eval.
-	// If staticEval - margin >= beta (maximizing) or staticEval + margin <= alpha
-	// (minimizing), the subtree almost certainly won't change the outcome — prune.
-	if cfg.AiEnableRFP && quietNode && normalWindow && depthFromRoot > 0 {
-		rfpMaxDepth := cfg.AiRFPMaxDepth
-		if rfpMaxDepth <= 0 {
-			rfpMaxDepth = 3
-		}
-		if depth <= rfpMaxDepth {
-			if ctx.settings.Stats != nil {
-				ctx.settings.Stats.RFPAttempts++
-			}
-			rfpMargin := cfg.AiRFPMargin
-			if rfpMargin <= 0 {
-				rfpMargin = 200.0
-			}
-			staticEval := evaluateStateHeuristicWithEvaluator(*state, ctx.rules, ctx.settings, ctx.evalState)
-			margin := rfpMargin * float64(depth)
-			if maximizing && staticEval-margin >= beta {
-				if ctx.settings.Stats != nil {
-					ctx.settings.Stats.RFPCutoffs++
-				}
-				return staticEval
-			}
-			if !maximizing && staticEval+margin <= alpha {
-				if ctx.settings.Stats != nil {
-					ctx.settings.Stats.RFPCutoffs++
-				}
-				return staticEval
-			}
-		}
-	}
-
-	// Null Move Pruning: at quiet nodes with enough depth, try passing our turn.
-	// If even the opponent, getting a free extra move at reduced depth, can't beat beta,
-	// then our real search will also beat beta — return beta immediately.
-	// Guard: never consecutive null moves; only quiet positions; skip at root;
-	// skip when the window is in forced-win/loss territory (normalWindow).
-	if cfg.AiEnableNMP && !ctx.nullMoveActive && quietNode && normalWindow && depthFromRoot > 0 {
-		nmpMinDepth := cfg.AiNMPMinDepth
-		if nmpMinDepth <= 0 {
-			nmpMinDepth = 3
-		}
-		if depth >= nmpMinDepth {
-			if ctx.settings.Stats != nil {
-				ctx.settings.Stats.NMPAttempts++
-			}
-			R := cfg.AiNMPReduction
-			if R < 1 {
-				R = 2
-			}
-			nullDepth := depth - R - 1
-			if nullDepth < 1 {
-				nullDepth = 1
-			}
-			nullOpponent := PlayerBlue
-			if currentPlayer == PlayerBlue {
-				nullOpponent = PlayerRed
-			}
-			ctx.nullMoveActive = true
-			var nullPrune bool
-			if maximizing {
-				nv := minimax(state, ctx, nullDepth, nullOpponent, depthFromRoot+1, beta-1, beta, nil)
-				nullPrune = nv >= beta
-			} else {
-				nv := minimax(state, ctx, nullDepth, nullOpponent, depthFromRoot+1, alpha, alpha+1, nil)
-				nullPrune = nv <= alpha
-			}
-			ctx.nullMoveActive = false
-			if nullPrune {
-				if ctx.settings.Stats != nil {
-					ctx.settings.Stats.NMPCutoffs++
-				}
-				// MAX fail-high: even opponent with free move can't prevent us beating beta.
-				// MIN fail-low: even opponent with free move can't raise score above alpha.
-				if maximizing {
-					return beta
-				}
-				return alpha
-			}
-		}
-	}
-
 	firstMove := Move{}
 	if len(candidates) > 0 {
 		firstMove = candidates[0]
@@ -6770,11 +6664,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 			if currentPlayer == PlayerRed {
 				win = winDistanceScore(winScore, depthFromRoot+1)
 			}
-			// Do not store to TT during null-move sub-searches: the TT key does not
-			// encode whose turn it is, so an entry stored with the null opponent as
-			// currentPlayer would be read back by the regular search with the real
-			// player, returning an incorrect win/loss score for that side.
-			if tt != nil && !ctx.nullMoveActive {
+			if tt != nil {
 				meta := buildTTMeta(*state, ctx.settings.BoardSize, ctx.footprint)
 				if outLine != nil {
 					next := state.Clone()
@@ -6982,7 +6872,7 @@ func minimax(state *GameState, ctx minimaxContext, depth int, currentPlayer Play
 	} else if best >= betaOrig {
 		flag = TTLower
 	}
-	if tt != nil && !ctx.nullMoveActive {
+	if tt != nil {
 		meta := buildTTMeta(*state, ctx.settings.BoardSize, ctx.footprint)
 		if outLine != nil {
 			meta.DebugBoard = debugBoardFromLine(bestLine)
@@ -7526,10 +7416,6 @@ func mergeSearchStats(dst, src *SearchStats) {
 	dst.PVSProxySoftWouldResearch += src.PVSProxySoftWouldResearch
 	dst.PVSProxyHardSamples += src.PVSProxyHardSamples
 	dst.PVSProxyHardWouldResearch += src.PVSProxyHardWouldResearch
-	dst.NMPAttempts += src.NMPAttempts
-	dst.NMPCutoffs += src.NMPCutoffs
-	dst.RFPAttempts += src.RFPAttempts
-	dst.RFPCutoffs += src.RFPCutoffs
 	dst.LMRReduced += src.LMRReduced
 	dst.LMRResearches += src.LMRResearches
 	dst.TacticalQuiescenceCalls += src.TacticalQuiescenceCalls

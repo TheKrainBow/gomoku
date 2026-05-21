@@ -14,9 +14,7 @@ type Config struct {
 	AiReturnLastComplete       bool            `json:"ai_return_last_complete_depth_only"`
 	AiEnableDynamicTopK        bool            `json:"ai_enable_dynamic_top_k"`
 	AiEnableHardPlyCaps        bool            `json:"ai_enable_hard_ply_caps"`
-	AiMaxCandidatesRoot        int             `json:"ai_max_candidates_root"`
-	AiMaxCandidatesMid         int             `json:"ai_max_candidates_mid"`
-	AiMaxCandidatesDeep        int             `json:"ai_max_candidates_deep"`
+	AiMaxCandidates            int             `json:"ai_max_candidates"`
 	AiMaxCandidatesPly7        int             `json:"ai_max_candidates_ply7"`
 	AiMaxCandidatesPly8        int             `json:"ai_max_candidates_ply8"`
 	AiMaxCandidatesPly9        int             `json:"ai_max_candidates_ply9"`
@@ -57,12 +55,6 @@ type Config struct {
 	AiEnablePVS                bool            `json:"ai_enable_pvs"`
 	AiKillerBoost              int             `json:"ai_killer_boost"`
 	AiHistoryBoost             int             `json:"ai_history_boost"`
-	AiEnableNMP                bool            `json:"ai_enable_nmp"`
-	AiNMPMinDepth              int             `json:"ai_nmp_min_depth"`
-	AiNMPReduction             int             `json:"ai_nmp_reduction"`
-	AiEnableRFP                bool            `json:"ai_enable_rfp"`
-	AiRFPMaxDepth              int             `json:"ai_rfp_max_depth"`
-	AiRFPMargin                float64         `json:"ai_rfp_margin"`
 	AiLazySMPWorkers           int             `json:"ai_lazy_smp_workers"`
 	AiEnableTacticalQuiescence bool            `json:"ai_enable_tactical_quiescence"`
 	AiTacticalQuiescenceDepth  int             `json:"ai_tactical_quiescence_depth"`
@@ -136,9 +128,7 @@ func DefaultConfig() Config {
 		AiEnableHardPlyCaps: true,
 
 		// Hard caps
-		AiMaxCandidatesRoot: 24,
-		AiMaxCandidatesMid:  24,
-		AiMaxCandidatesDeep: 24,
+		AiMaxCandidates: 24,
 
 		AiMaxCandidatesPly7: 8,
 		AiMaxCandidatesPly8: 7,
@@ -184,7 +174,7 @@ func DefaultConfig() Config {
 		// Queue
 		AiQueueWorkers:        4,
 		AiQueueAnalyzeThreads: 0,
-		AiQueueEnabled:        false,
+		AiQueueEnabled:        true,
 		AiAnaliticsTopBoards:  7,
 
 		// TT: slightly larger than 1<<18 helps a lot once you deepen regularly
@@ -194,7 +184,7 @@ func DefaultConfig() Config {
 		AiTtSize:              1 << 19, // 524288
 		AiTtMaxEntries:        0,
 		AiTtMaxMemoryBytes:    5 * 1024 * 1024 * 1024, // 5 GB
-		AiEnableTtPersistence: false,
+		AiEnableTtPersistence: true,
 		AiTtPersistencePath:   "tt_cache.gob",
 		AiEnableRootTranspose: true,
 		AiRootTransposeSize:   1 << 16, // 65536
@@ -207,19 +197,6 @@ func DefaultConfig() Config {
 		// Boosts: keep killer moderate, history moderate
 		AiKillerBoost:  6000,
 		AiHistoryBoost: 16,
-
-		// Null Move Pruning: at quiet nodes with depth >= NMPMinDepth, try passing.
-		// If the opponent still can't beat beta with the extra move, prune.
-		// Only on quiet nodes (!tactical && !hardRestricted && !forcedWinLine).
-		AiEnableNMP:    false,
-		AiNMPMinDepth:  3,
-		AiNMPReduction: 2,
-
-		// Reverse Futility Pruning: at shallow quiet nodes, if static eval - margin >= beta,
-		// return static eval immediately (we're already so good we won't fall below beta).
-		AiEnableRFP:   false,
-		AiRFPMaxDepth: 3,
-		AiRFPMargin:   200.0,
 
 		// Lazy SMP: number of parallel search threads (1 = disabled).
 		// Workers share the TT, each has own killers/history.

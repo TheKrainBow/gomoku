@@ -705,7 +705,7 @@ func TestHasDecisiveCaptureThreatDetectsImmediateCaptureWinByCount(t *testing.T)
 func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AiEnableHardPlyCaps = true
-	cfg.AiMaxCandidatesRoot = 24
+	cfg.AiMaxCandidates = 24
 	cfg.AiMaxCandidatesPly7 = 16
 	cfg.AiMaxCandidatesPly8 = 12
 	cfg.AiMaxCandidatesPly9 = 8
@@ -2422,11 +2422,7 @@ func runFixedPositionDebugScenario(t *testing.T, name string, build func() (Game
 			stats.QuietPriorityReplacements,
 			stats.QuietPrioritySkipped,
 		)
-		writeLine("perf_prunes nmp=%d/%d rfp=%d/%d lmr=%d/%d tq_calls=%d",
-			stats.NMPCutoffs,
-			stats.NMPAttempts,
-			stats.RFPCutoffs,
-			stats.RFPAttempts,
+		writeLine("perf_prunes lmr=%d/%d tq_calls=%d",
 			stats.LMRResearches,
 			stats.LMRReduced,
 			stats.TacticalQuiescenceCalls,

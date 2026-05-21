@@ -174,9 +174,7 @@ func TestSuggestionDepthTenStoresTTAndSkipsBacklogEnqueue(t *testing.T) {
 	cfg.AiEnableAspiration = false
 	cfg.AiEnableDynamicTopK = false
 	cfg.AiEnableHardPlyCaps = true
-	cfg.AiMaxCandidatesRoot = 1
-	cfg.AiMaxCandidatesMid = 1
-	cfg.AiMaxCandidatesDeep = 1
+	cfg.AiMaxCandidates = 1
 	cfg.AiEnableKillerMoves = false
 	cfg.AiEnableHistoryMoves = false
 	configStore.Update(cfg)

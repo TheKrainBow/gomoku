@@ -87,9 +87,7 @@ type AITurnDecisionLog struct {
 
 func liveAIConfig(config Config) Config {
 	adjusted := config
-	adjusted.AiEnableTtPersistence = false
 	adjusted.AiPonderingEnabled = false
-	adjusted.AiQueueEnabled = false
 	adjusted.AiTimeBudgetMs = 0
 	adjusted.AiMinDepth = 2
 	adjusted.AiMaxDepth = adjusted.AiDepth
