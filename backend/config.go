@@ -230,13 +230,13 @@ func DefaultConfig() Config {
 			ForkOpen3:    42035.40739524599,
 			ForkFourPlus: 130181.77247952914,
 
-			CaptureNow:          18000.0,
-			CaptureDoubleThreat: 15000.0,
-			CaptureNearWin:      35000.0,
-			CaptureInTwo:        4000.0,
-			HangingPair:         14000.0,
-			CaptureWinSoonScale: 0.95,
-			CaptureInTwoLimit:   8,
+			CaptureNow:          38000.0,
+			CaptureDoubleThreat: 55000.0,
+			CaptureNearWin:      120000.0,
+			CaptureInTwo:        12000.0,
+			HangingPair:         3000.0,
+			CaptureWinSoonScale: 0.80,
+			CaptureInTwoLimit:   12,
 		},
 	}
 }

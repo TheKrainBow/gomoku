@@ -108,6 +108,14 @@ type Threat struct {
 	RealDefenseCount    int
 	ForkPotential       bool
 	UrgencyScore        float64
+	// MovesToWin is how many attacker moves are needed to win with this threat
+	// if the defender does not respond at all. Used to compare threat urgency:
+	// a threat with fewer MovesToWin resolves first and may allow ignoring slower threats.
+	// -1 means unknown / not applicable.
+	MovesToWin int
+	// BlockingSquares is the number of distinct cells that can neutralise this
+	// threat in one defensive move. 0 means the threat is unblockable (e.g. Open-4).
+	BlockingSquares int
 }
 
 type EvalResult struct {
@@ -404,14 +412,59 @@ func staticThreatTier(typ ThreatType) ThreatTier {
 		return TierWinning
 	case ThreatOpen4:
 		return TierCritical
-	case ThreatClosed4, ThreatBroken4:
+	case ThreatClosed4, ThreatBroken4, ThreatOpen3:
+		// Open-3 has 2 moves to win and 2 blocking squares — same urgency as Closed-4
+		// (1 move to win, 1 blocking square). Both lose in the same number of turns if
+		// left unanswered; the only difference is the number of defensive options.
 		return TierMustAnswer
-	case ThreatOpen3, ThreatBroken3:
+	case ThreatBroken3:
 		return TierStrong
 	case ThreatOpen2, ThreatClosed2:
 		return TierPressure
 	default:
 		return TierNone
+	}
+}
+
+// movesToWinForPattern returns how many attacker moves are needed to win with
+// this pattern if the defender never responds. 0 = already won, -1 = unknown.
+func movesToWinForPattern(typ PatternType) int {
+	switch typ {
+	case PatternWin5:
+		return 0
+	case PatternOpen4, PatternClosed4, PatternBroken4:
+		return 1
+	case PatternOpen3, PatternBroken3:
+		return 2
+	case PatternOpen2:
+		return 3
+	case PatternClosed2, PatternBroken2:
+		return 4
+	default:
+		return -1
+	}
+}
+
+// blockingSquaresForPattern returns the number of cells that can neutralise
+// this threat in one defensive move. 0 means unblockable.
+func blockingSquaresForPattern(typ PatternType) int {
+	switch typ {
+	case PatternWin5:
+		return 0
+	case PatternOpen4:
+		return 0 // both ends win; one block still leaves the other end open
+	case PatternClosed4, PatternBroken4:
+		return 1
+	case PatternOpen3:
+		return 2
+	case PatternBroken3:
+		return 1
+	case PatternOpen2:
+		return 2
+	case PatternClosed2, PatternBroken2:
+		return 1
+	default:
+		return -1
 	}
 }
 

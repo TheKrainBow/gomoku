@@ -1818,9 +1818,9 @@ func bestThreatTierFromSummary(summary TacticalSummary, player PlayerColor) Thre
 			return TierWinning
 		case summary.Open4Blue > 0:
 			return TierCritical
-		case summary.Closed4Blue > 0 || summary.Broken4Blue > 0:
+		case summary.Closed4Blue > 0 || summary.Broken4Blue > 0 || summary.Open3Blue > 0:
 			return TierMustAnswer
-		case summary.Open3Blue > 0 || summary.Broken3Blue > 0:
+		case summary.Broken3Blue > 0:
 			return TierStrong
 		default:
 			return TierNone
@@ -1831,9 +1831,9 @@ func bestThreatTierFromSummary(summary TacticalSummary, player PlayerColor) Thre
 			return TierWinning
 		case summary.Open4Red > 0:
 			return TierCritical
-		case summary.Closed4Red > 0 || summary.Broken4Red > 0:
+		case summary.Closed4Red > 0 || summary.Broken4Red > 0 || summary.Open3Red > 0:
 			return TierMustAnswer
-		case summary.Open3Red > 0 || summary.Broken3Red > 0:
+		case summary.Broken3Red > 0:
 			return TierStrong
 		default:
 			return TierNone
@@ -2172,9 +2172,9 @@ func bestThreatPattern(threats []Threat) PatternType {
 func summaryTriggersHardTactical(summary TacticalSummary, player PlayerColor) bool {
 	switch player {
 	case PlayerBlue:
-		return summary.WinNowBlue > 0 || summary.Open4Blue > 0 || summary.Closed4Blue > 0 || summary.Broken4Blue > 0
+		return summary.WinNowBlue > 0 || summary.Open4Blue > 0 || summary.Closed4Blue > 0 || summary.Broken4Blue > 0 || summary.Open3Blue > 0
 	case PlayerRed:
-		return summary.WinNowRed > 0 || summary.Open4Red > 0 || summary.Closed4Red > 0 || summary.Broken4Red > 0
+		return summary.WinNowRed > 0 || summary.Open4Red > 0 || summary.Closed4Red > 0 || summary.Broken4Red > 0 || summary.Open3Red > 0
 	default:
 		return false
 	}
@@ -2378,11 +2378,11 @@ func selectedMustPlayMoves(context ThreatContext, boardSize int) []Move {
 }
 
 // isDecisiveBlockPattern returns true for threats that require an immediate forced block
-// (Win5, Open4, Closed4, Broken4). Open3 and below are NOT forced blocks — the AI
-// should evaluate them freely against its own counter-threats.
+// (Win5, Open4, Closed4, Broken4, Open3). Open3 is TierMustAnswer: if unblocked it
+// becomes an Open4 which is unblockable, so it must be addressed now.
 func isDecisiveBlockPattern(pattern PatternType) bool {
 	switch pattern {
-	case PatternWin5, PatternOpen4, PatternClosed4, PatternBroken4:
+	case PatternWin5, PatternOpen4, PatternClosed4, PatternBroken4, PatternOpen3:
 		return true
 	default:
 		return false
@@ -2434,7 +2434,7 @@ func hasForcedThreatResponses(context ThreatContext, boardSize int) bool {
 func tierTriggersTactical(threats []Threat) bool {
 	for _, threat := range threats {
 		switch threat.Type {
-		case ThreatWin5, ThreatOpen4, ThreatClosed4, ThreatBroken4:
+		case ThreatWin5, ThreatOpen4, ThreatClosed4, ThreatBroken4, ThreatOpen3:
 			return true
 		}
 	}
@@ -2648,10 +2648,11 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 	context.PreventForkMoves = filterLegalMoves(state, rules, sideToMove, context.PreventForkMoves, settings.BoardSize)
 	context.CaptureMoves = filterLegalMoves(state, rules, sideToMove, context.CaptureMoves, settings.BoardSize)
 	context.CaptureDefenseMoves = filterLegalMoves(state, rules, sideToMove, context.CaptureDefenseMoves, settings.BoardSize)
-	// When the opponent has a hard threat (4-in-a-row or better), keep only
-	// captures that directly break that threat. Capturing elsewhere only buys
-	// one tempo while the opponent completes their forcing sequence.
-	if summaryTriggersHardTactical(eval.Summary, otherPlayer(sideToMove)) || len(context.MustBlockMoves) > 0 {
+	// Only strip non-breaking captures when the opponent has an Open4 or Win5
+	// (TierCritical+). For TierMustAnswer threats (Closed4, Broken4, Open3) the
+	// AI must be able to choose between blocking and capturing — stripping captures
+	// here would remove valid "capture instead of block" options.
+	if context.OppBestTier >= TierCritical {
 		breaking := make(map[int]struct{}, len(captureThreats))
 		for _, ct := range captureThreats {
 			if ct.Owner == sideToMove && (ct.BreaksEnemyOpen4 || ct.BreaksEnemyThreat) {
@@ -2805,9 +2806,24 @@ func buildRootMovePool(state GameState, ctx minimaxContext, currentPlayer Player
 	}
 
 	for _, move := range threatContext.CaptureMoves {
-		builder.addMove(move, rootSourceCaptureOwn, prioCaptureCreate, false, func(rm *RootMove) {
+		// Classify capture: defensive (removes opponent threat stones) or free.
+		// Defensive captures are ordered alongside block moves (prioBlockWin, ForcedThreat
+		// flag) so the search tries them before non-defensive alignment moves.
+		// Free captures are still forced=true so they always survive pool restrictions,
+		// but they sort after block/defensive moves.
+		defensive := threatContext.OppBestTier >= TierMustAnswer &&
+			isDefensiveCapture(state.Board, ctx.rules, move, currentPlayer, ctx.evalState)
+		prio := prioCaptureCreate
+		if defensive {
+			prio = prioBlockWin
+		}
+		builder.addMove(move, rootSourceCaptureOwn, prio, true, func(rm *RootMove) {
 			captured := captureStoneCountForMove(state.Board, ctx.rules, move, currentPlayer)
 			rm.ThreatFlags |= rootThreatCaptureCreate
+			if defensive {
+				// Mark as ForcedThreat so sortRootMoveIndices groups it with blocks.
+				rm.ThreatFlags |= rootThreatOppWin
+			}
 			rm.CaptureValue += maxInt(1, captured/2)
 			rm.ThreatSeverity += 35 + captured*10
 		})
@@ -2841,7 +2857,14 @@ func buildRootMovePool(state GameState, ctx minimaxContext, currentPlayer Player
 	}
 
 	if shouldRestrictRootPoolToMustPlay(threatContext, builder.boardSize) {
-		limitRootMovePoolToMoves(builder, uniqueMoves(append(append([]Move(nil), threatContext.WinningMoves...), selectedMustPlayMoves(threatContext, builder.boardSize)...), builder.boardSize))
+		// Keep own captures alongside the MustPlay moves so the engine can choose
+		// to advance the capture race instead of developing an alignment threat.
+		mustPlayMoves := uniqueMoves(append(append(append([]Move(nil),
+			threatContext.WinningMoves...),
+			selectedMustPlayMoves(threatContext, builder.boardSize)...),
+			threatContext.CaptureMoves...),
+			builder.boardSize)
+		limitRootMovePoolToMoves(builder, mustPlayMoves)
 		finishRootMovePool(state, builder)
 		return builder.moves
 	}
@@ -2937,6 +2960,13 @@ func shouldRestrictRootPoolToForcing(context ThreatContext, rootMoves []RootMove
 	if len(rootMoves) == 0 {
 		return false
 	}
+	// When the opponent's threat is below TierCritical (i.e. Open3/Closed4 —
+	// TierMustAnswer) and captures are available, do not restrict: the AI must
+	// choose between blocking and advancing the capture race. Restricting to
+	// forced-only moves here would silently drop captures from the root pool.
+	if context.OppBestTier < TierCritical && len(context.CaptureMoves) > 0 {
+		return false
+	}
 	if len(context.WinningMoves) > 0 || len(selectedMustBlockMoves(context, boardSize)) > 0 {
 		return true
 	}
@@ -2947,11 +2977,14 @@ func shouldRestrictRootPoolToMustPlay(context ThreatContext, boardSize int) bool
 	if len(context.WinningMoves) > 0 {
 		return false
 	}
-	return len(selectedMustPlayMoves(context, boardSize)) > 0 && context.OppBestTier <= context.OwnBestTier
+	// Strict: only skip blocking when own threat is strictly stronger than opponent's.
+	// Equal tiers (e.g. both Open3) keep block moves in the pool so the search
+	// can weigh attacking vs. defending rather than being forced into pure attack.
+	return len(selectedMustPlayMoves(context, boardSize)) > 0 && context.OppBestTier < context.OwnBestTier
 }
 
 // shouldRestrictRootPoolToCounterAttack returns true when the AI has counter-threats
-// (fork or Open3 creation moves) at least as strong as the opponent's threats.
+// (fork or Open3 creation moves) strictly stronger than the opponent's threats.
 // In that case, focus the root pool on own attacks rather than defensive blocking.
 func shouldRestrictRootPoolToCounterAttack(context ThreatContext, boardSize int) bool {
 	if len(context.WinningMoves) > 0 || len(selectedMustPlayMoves(context, boardSize)) > 0 {
@@ -2961,7 +2994,10 @@ func shouldRestrictRootPoolToCounterAttack(context ThreatContext, boardSize int)
 	if !ownHasTactical {
 		return false
 	}
-	return context.OwnBestTier >= TierStrong && context.OppBestTier <= context.OwnBestTier
+	// Strict: only counter-attack when own tier is strictly above opponent's.
+	// Equal tiers (e.g. both Open3) keep block moves in the pool so the search
+	// decides whether to attack or defend.
+	return context.OwnBestTier >= TierStrong && context.OwnBestTier > context.OppBestTier
 }
 
 func limitRootMovePoolToMoves(builder *rootMoveBuilder, moves []Move) {
@@ -3622,6 +3658,7 @@ func buildHardRestrictedNodeCandidates(state GameState, ctx minimaxContext, curr
 	addCore(context.WinningMoves, prioWin, &restricted)
 	addCore(mustPlay, prioBlockWin, &restricted)
 	addCore(mustBlock, prioBlockFour, &restricted)
+	addCore(context.CaptureMoves, prioCaptureCreate, &restricted)
 	if !hasMustResponse {
 		addCore(context.CaptureDefenseMoves, prioCapturePrevent, &restricted)
 	}
@@ -5870,6 +5907,53 @@ func wouldCapture(board Board, move Move, playerCell, opponentCell Cell) bool {
 
 func captureStoneCountForMove(board Board, rules Rules, move Move, player PlayerColor) int {
 	return len(rules.FindCaptures(board, move, CellFromPlayer(player)))
+}
+
+// isDefensiveCapture returns true if playing 'move' would capture at least one
+// stone that lies on a line where the opponent currently holds a threatening
+// pattern (Open3 or stronger). Such a capture advances the capture race AND
+// directly weakens the opponent's alignment, so it is ordered alongside block
+// moves rather than deferred to the free-capture tier.
+func isDefensiveCapture(board Board, rules Rules, move Move, player PlayerColor, evalState *EvalState) bool {
+	if evalState == nil || evalState.geometry == nil {
+		return false
+	}
+	opp := otherPlayer(player)
+	captured := rules.FindCaptures(board, move, CellFromPlayer(player))
+	if len(captured) == 0 {
+		return false
+	}
+	size := board.Size()
+	for _, cap := range captured {
+		capIdx := cap.Y*size + cap.X
+		if capIdx < 0 || capIdx >= len(evalState.geometry.cellToLines) {
+			continue
+		}
+		for _, lineIdx := range evalState.geometry.cellToLines[capIdx] {
+			if lineIdx < 0 || lineIdx >= len(evalState.Lines) {
+				continue
+			}
+			ls := evalState.Lines[lineIdx]
+			var threat bool
+			if opp == PlayerBlue {
+				threat = ls.CountsBlue[PatternWin5] > 0 ||
+					ls.CountsBlue[PatternOpen4] > 0 ||
+					ls.CountsBlue[PatternClosed4] > 0 ||
+					ls.CountsBlue[PatternBroken4] > 0 ||
+					ls.CountsBlue[PatternOpen3] > 0
+			} else {
+				threat = ls.CountsRed[PatternWin5] > 0 ||
+					ls.CountsRed[PatternOpen4] > 0 ||
+					ls.CountsRed[PatternClosed4] > 0 ||
+					ls.CountsRed[PatternBroken4] > 0 ||
+					ls.CountsRed[PatternOpen3] > 0
+			}
+			if threat {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func findCaptureMoves(state GameState, rules Rules, player PlayerColor, evalState *EvalState) []Move {

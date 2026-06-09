@@ -711,8 +711,8 @@ func capturePlayerEvalScore(s *EvalState, player PlayerColor, target int) float6
 
 	pairsCaptured := float64(captured) / 2.0
 	score := pairsCaptured * s.weights.CaptureNow
-	// Strongly reward states where captures are already secured so search keeps
-	// leaning toward capture races and trap conversion instead of quiet structure.
+	// Quadratic bonus: each additional captured pair is worth more than the last,
+	// reflecting the compounding advantage of a capture lead.
 	if pairsCaptured > 0 {
 		score += pairsCaptured * pairsCaptured * s.weights.CaptureNow * 0.85
 	}
@@ -722,24 +722,25 @@ func capturePlayerEvalScore(s *EvalState, player PlayerColor, target int) float6
 		remainingStones = 0
 	}
 	availableCaptureMoves := countAvailableCaptureRefs(refs)
-	// Immediate capture opportunities should be strongly preferred over
-	// "holding" vulnerable pairs on board. This pushes the engine to convert
-	// trap patterns into concrete captures quickly.
 	if availableCaptureMoves > 0 {
-		score += float64(availableCaptureMoves) * s.weights.CaptureNow * 0.35
+		score += float64(availableCaptureMoves) * s.weights.CaptureNow
 	}
-	if remainingStones <= 4 {
-		score += s.weights.CaptureNearWin * math.Pow(s.weights.CaptureWinSoonScale, float64(remainingStones))
-		if availableCaptureMoves > 0 {
-			score += float64(minInt(availableCaptureMoves, s.weights.CaptureInTwoLimit)) * s.weights.CaptureInTwo
-		}
+	// CaptureNearWin is active across the entire game (remainingStones <= target).
+	// The exponential curve (CaptureWinSoonScale < 1) ensures each captured pair
+	// is worth more than the last, creating a strong compounding incentive to
+	// pursue captures from the very first stone.
+	score += s.weights.CaptureNearWin * math.Pow(s.weights.CaptureWinSoonScale, float64(remainingStones))
+	if availableCaptureMoves > 0 {
+		score += float64(minInt(availableCaptureMoves, s.weights.CaptureInTwoLimit)) * s.weights.CaptureInTwo
 	}
-	if remainingStones <= 2 && availableCaptureMoves > 0 {
+	// Double-threat bonus: when the opponent cannot stop two simultaneous capture
+	// threats. Activates at <=6 remaining (3 pairs to go) so it drives the endgame.
+	if remainingStones <= 6 && availableCaptureMoves > 0 {
 		score += s.weights.CaptureDoubleThreat
 	}
 
-	// Penalize pairs that can be taken immediately: they often erase structural gains
-	// and accelerate the opponent's capture race.
+	// Penalize exposed pairs — but keep the penalty moderate so the engine does
+	// not avoid building the very pair-on-board positions that enable captures.
 	score -= float64(countCapturablePairs(s.board, player)) * s.weights.HangingPair
 	return score
 }
@@ -892,8 +893,8 @@ func buildTacticalSummary(patternCounts [2][PatternBroken2 + 1]uint16, blueCaptu
 	summary.DoubleThreatRed = summary.Open4Red >= 2 ||
 		(summary.Open4Red >= 1 && (summary.Broken4Red >= 1 || summary.Closed4Red >= 1)) ||
 		summary.Open3Red >= 2
-	summary.ForcingThreatsBlue = summary.Open4Blue + summary.Closed4Blue + summary.Broken4Blue
-	summary.ForcingThreatsRed = summary.Open4Red + summary.Closed4Red + summary.Broken4Red
+	summary.ForcingThreatsBlue = summary.Open4Blue + summary.Closed4Blue + summary.Broken4Blue + summary.Open3Blue
+	summary.ForcingThreatsRed = summary.Open4Red + summary.Closed4Red + summary.Broken4Red + summary.Open3Red
 	summary.MustAnswerForBlue = summary.WinNowRed > 0 ||
 		summary.CaptureWinNowRed > 0 ||
 		summary.Open4Red > 0 ||
@@ -1040,18 +1041,21 @@ func buildThreatObject(board Board, player PlayerColor, threat evalThreat) Threa
 		defenses = append(defenses, pos)
 		patternCells = append(patternCells, pos)
 	}
+	typ := ThreatType(threat.typ)
 	return Threat{
-		Owner:            player,
-		Type:             ThreatType(threat.typ),
-		Tier:             staticThreatTier(ThreatType(threat.typ)),
-		Direction:        int(threat.dir),
-		Stones:           stones,
-		PatternCells:     patternCells,
+		Owner:           player,
+		Type:            typ,
+		Tier:            staticThreatTier(typ),
+		Direction:       int(threat.dir),
+		Stones:          stones,
+		PatternCells:    patternCells,
 		ExtensionSquares: extensions,
-		DefenseSquares:   defenses,
-		TotalStones:      len(threat.stones),
-		Stable:           true,
-		ForkPotential:    len(threat.extensions) >= 2,
+		DefenseSquares:  defenses,
+		TotalStones:     len(threat.stones),
+		Stable:          true,
+		ForkPotential:   len(threat.extensions) >= 2,
+		MovesToWin:      movesToWinForPattern(PatternType(typ)),
+		BlockingSquares: blockingSquaresForPattern(PatternType(typ)),
 	}
 }
 
@@ -1070,18 +1074,21 @@ func buildThreatObjectFromLUT(board Board, player PlayerColor, threat evalLUTThr
 		extensions = append(extensions, pos)
 		defenses = append(defenses, pos)
 	}
+	typ := ThreatType(threat.typ)
 	return Threat{
-		Owner:            player,
-		Type:             ThreatType(threat.typ),
-		Tier:             staticThreatTier(ThreatType(threat.typ)),
-		Direction:        int(threat.dir),
-		Stones:           stones,
-		PatternCells:     patternCells,
+		Owner:           player,
+		Type:            typ,
+		Tier:            staticThreatTier(typ),
+		Direction:       int(threat.dir),
+		Stones:          stones,
+		PatternCells:    patternCells,
 		ExtensionSquares: extensions,
-		DefenseSquares:   defenses,
-		TotalStones:      len(threat.stones),
-		Stable:           true,
-		ForkPotential:    threat.forkPotential,
+		DefenseSquares:  defenses,
+		TotalStones:     len(threat.stones),
+		Stable:          true,
+		ForkPotential:   threat.forkPotential,
+		MovesToWin:      movesToWinForPattern(PatternType(typ)),
+		BlockingSquares: blockingSquaresForPattern(PatternType(typ)),
 	}
 }
 

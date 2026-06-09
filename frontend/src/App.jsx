@@ -558,20 +558,59 @@ export default function App() {
     return `${hours.toFixed(2)} h`
   }
 
+  const captureTargetPairs = Math.max(1, Math.floor((status.capture_win_stones || 10) / 2))
   const captured = useMemo(() => {
     let blue = 0
     let red = 0
     for (const entry of history) {
-      if (entry.captured_count) {
-        if (entry.player === 1) {
-          blue += entry.captured_count
-        } else if (entry.player === 2) {
-          red += entry.captured_count
-        }
+      if (!entry.captured_count) {
+        continue
+      }
+      if (entry.player === 1) {
+        blue += entry.captured_count
+      } else if (entry.player === 2) {
+        red += entry.captured_count
       }
     }
     return { blue, red }
   }, [history])
+
+  const captureCards = useMemo(
+    () =>
+      [
+        {
+          player: 1,
+          name: 'Blue',
+          capturedStones: captured.blue,
+          accent: 'blue'
+        },
+        {
+          player: 2,
+          name: 'Red',
+          capturedStones: captured.red,
+          accent: 'red'
+        }
+      ].map((card) => {
+        const capturedPairs = Math.min(captureTargetPairs, Math.floor(card.capturedStones / 2))
+        const isNextPlayer =
+          status.status === 'running' && status.winner === 0 && status.next_player === card.player
+        const isWinner = status.winner === card.player
+        return {
+          ...card,
+          capturedPairs,
+          isNextPlayer,
+          isWinner
+        }
+      }),
+    [
+      captured.blue,
+      captured.red,
+      captureTargetPairs,
+      status.next_player,
+      status.status,
+      status.winner
+    ]
+  )
 
   const turnInfo = useMemo(() => {
     if (status.winner === 0) {
@@ -594,11 +633,15 @@ export default function App() {
     return { prefix: 'Player ', player: winnerLabel, suffix: ' won', playerNumber: status.winner }
   }, [status.winner, status.status, status.win_reason, status.capture_win_stones, status.next_player, nextPlayerLabel, winnerLabel])
 
-  const statusLabel = useMemo(() => {
-    if (status.status === 'blue_won') return 'blue_won'
-    if (status.status === 'red_won') return 'red_won'
-    return status.status
-  }, [status.status])
+  const turnStatusLabel = useMemo(() => {
+    if (status.winner !== 0) {
+      return 'Game over'
+    }
+    if (status.status === 'running') {
+      return `To play: ${nextPlayerLabel}`
+    }
+    return `Next: ${nextPlayerLabel}`
+  }, [status.winner, status.status, nextPlayerLabel, winnerLabel])
 
   const currentTurnElapsedMs =
     status.status === 'running' && status.turn_started_at_ms > 0
@@ -852,20 +895,43 @@ export default function App() {
         <section className="panel settings-panel">
           <h2>Settings</h2>
           <div className="panel-scroll">
-            <div className="grid">
-              <div>
-                <strong>Status:</strong> {statusLabel}
-              </div>
-              <div>
-                <strong>Next Player:</strong> {status.next_player === 1 ? 'Blue' : 'Red'}
-              </div>
-              <div>
-                <strong>Winner:</strong> {status.winner === 0 ? 'None' : status.winner === 1 ? 'Blue' : 'Red'}
-              </div>
-            <div>
-              <strong>Captured (Blue/Red):</strong> {captured.blue} / {captured.red}
+            <div className="capture-status-grid">
+              {captureCards.map((card) => (
+                <article
+                  className={`capture-card capture-card-${card.accent} ${card.isNextPlayer ? 'is-next' : ''} ${
+                    card.isWinner ? 'is-winner' : ''
+                  }`}
+                  key={card.player}
+                >
+                  <div className="capture-card-header">
+                    <div className="capture-card-name">
+                      {card.name}
+                      {card.isWinner ? <span className="capture-card-crown" aria-hidden="true">♛</span> : null}
+                    </div>
+                  </div>
+                  <div className="capture-card-stone" aria-hidden="true" />
+                  <div className="capture-card-bulbs" aria-label={`${card.name} capture progress`}>
+                    {Array.from({ length: captureTargetPairs }, (_, index) => (
+                      <span
+                        className={`capture-bulb ${index < card.capturedPairs ? 'lit' : ''}`}
+                        key={`${card.player}-bulb-${index}`}
+                      />
+                    ))}
+                  </div>
+                </article>
+              ))}
             </div>
-            </div>
+            {status.winner === 0 ? (
+              <div className="status-strip">
+                <span
+                  className={`status-pill status-player-${status.next_player === 1 ? 1 : 2} ${
+                    status.status === 'running' ? 'status-pill-turn' : ''
+                  }`}
+                >
+                  {turnStatusLabel}
+                </span>
+              </div>
+            ) : null}
             <div className="settings-grid">
               <label>
                 Mode
