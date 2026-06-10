@@ -90,6 +90,7 @@ type HeuristicConfig struct {
 	CaptureNearWin      float64 `json:"capture_near_win"`
 	CaptureInTwo        float64 `json:"capture_in_two"`
 	HangingPair         float64 `json:"hanging_pair"`
+	LastMoveNeighbor    float64 `json:"last_move_neighbor"`
 	CaptureWinSoonScale float64 `json:"capture_win_soon_scale"`
 	CaptureInTwoLimit   int     `json:"capture_in_two_limit"`
 }
@@ -128,11 +129,7 @@ func DefaultConfig() Config {
 		AiEnableHardPlyCaps: true,
 
 		// Hard caps
-		AiMaxCandidates: 24,
-
-		AiMaxCandidatesPly7: 8,
-		AiMaxCandidatesPly8: 7,
-		AiMaxCandidatesPly9: 6,
+		AiMaxCandidates: 32,
 
 		// Quiet positions (dynamic K)
 		AiKQuietRoot: 16,
@@ -145,7 +142,7 @@ func DefaultConfig() Config {
 		AiKTactDeep: 14,
 
 		// Tactical quiescence: extend only along tactical moves when the leaf is unstable.
-		AiEnableTacticalQuiescence: true,
+		AiEnableTacticalQuiescence: false,
 		AiTacticalQuiescenceDepth:  6,
 
 		// Quick win exit
@@ -235,6 +232,7 @@ func DefaultConfig() Config {
 			CaptureNearWin:      120000.0,
 			CaptureInTwo:        12000.0,
 			HangingPair:         3000.0,
+			LastMoveNeighbor:    24.0,
 			CaptureWinSoonScale: 0.80,
 			CaptureInTwoLimit:   12,
 		},

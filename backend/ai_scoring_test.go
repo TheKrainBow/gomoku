@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,80 @@ import (
 )
 
 var fixedDebugStdoutMu sync.Mutex
+
+type orderingBenchmarkCase struct {
+	name     string
+	state    GameState
+	rules    Rules
+	settings GameSettings
+}
+
+type orderingBenchmarkDetail struct {
+	scenario   string
+	finalMove  Move
+	rank       int
+	orderCount int
+	topMoves   []Move
+}
+
+type orderingBenchmarkSummary struct {
+	depth         int
+	positions     int
+	avgCandidates float64
+	avgRank       float64
+	worstRank     int
+	top1Pct       float64
+	top2Pct       float64
+	top4Pct       float64
+	top8Pct       float64
+}
+
+type orderingBenchmarkDepthResult struct {
+	depth     int
+	finalMove Move
+	rank      int
+}
+
+type orderingBenchmarkAggregate struct {
+	positions     int
+	candidateSum  int
+	rankSum       int
+	worstRank     int
+	top1Count     int
+	top2Count     int
+	top4Count     int
+	top8Count     int
+}
+
+func benchmarkProgressStep(total int) int {
+	switch {
+	case total >= 2000:
+		return 10
+	case total >= 1000:
+		return 5
+	case total >= 250:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func logBenchmarkProgress(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[ordering-bench] "+format+"\n", args...)
+}
+
+func benchmarkCorpusSize() int {
+	size := 200
+	if testing.Short() {
+		size = 100
+	}
+	if raw := os.Getenv("GOMOKU_ORDERING_BENCH_POSITIONS"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			size = parsed
+		}
+	}
+	return size
+}
 
 type fixedLUTPredictionStats struct {
 	mu             sync.Mutex
@@ -420,6 +495,133 @@ func TestFindCaptureThreatResponsesBlocksDecisiveThreat(t *testing.T) {
 	}
 }
 
+func TestHeuristicForMoveSlightlyFavorsLastMoveNeighborhood(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerRed
+	state.Status = StatusRunning
+	state.Board.Set(4, 4, CellBlue)
+	state.HasLastMove = true
+	state.LastMove = Move{X: 4, Y: 4}
+	state.recomputeHashes()
+	stateNoLastMove := state
+	stateNoLastMove.HasLastMove = false
+
+	cfg := DefaultConfig()
+	scoreNear := heuristicForMove(state, rules, AIScoreSettings{
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Config:    cfg,
+	}, Move{X: 4, Y: 5}, nil)
+	scoreNearNoLastMove := heuristicForMove(stateNoLastMove, rules, AIScoreSettings{
+		BoardSize: settings.BoardSize,
+		Player:    stateNoLastMove.ToMove,
+		Config:    cfg,
+	}, Move{X: 4, Y: 5}, nil)
+	scoreFar := heuristicForMove(state, rules, AIScoreSettings{
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Config:    cfg,
+	}, Move{X: 0, Y: 0}, nil)
+	scoreFarNoLastMove := heuristicForMove(stateNoLastMove, rules, AIScoreSettings{
+		BoardSize: settings.BoardSize,
+		Player:    stateNoLastMove.ToMove,
+		Config:    cfg,
+	}, Move{X: 0, Y: 0}, nil)
+
+	if scoreNear <= scoreNearNoLastMove {
+		t.Fatalf("expected near reply score %.2f to exceed no-last-move score %.2f", scoreNear, scoreNearNoLastMove)
+	}
+	if delta := scoreNear - scoreNearNoLastMove; delta <= 0 || delta >= 100 {
+		t.Fatalf("expected small but positive locality delta for near reply, got %.2f", delta)
+	}
+	if scoreFar != scoreFarNoLastMove {
+		t.Fatalf("expected far move score to stay unchanged, got with bonus %.2f vs without %.2f", scoreFar, scoreFarNoLastMove)
+	}
+}
+
+func TestApplyMoveSignalsImmediateCaptureLoss(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerRed
+	state.Status = StatusRunning
+	state.CapturedBlue = 8
+	state.Board.Set(1, 4, CellRed)
+	state.Board.Set(2, 4, CellRed)
+	state.Board.Set(3, 4, CellBlue)
+	state.Board.Set(5, 5, CellBlue)
+	state.Board.Set(6, 5, CellBlue)
+	state.Board.Set(7, 5, CellRed)
+	state.recomputeHashes()
+
+	if !applyMove(&state, rules, Move{X: 4, Y: 5}, PlayerRed) {
+		t.Fatalf("expected tempting capture move to be legal")
+	}
+	if state.Status != StatusBlueWon {
+		t.Fatalf("expected immediate capture threat to signal blue win, got %v", state.Status)
+	}
+}
+
+func TestScoreBoardPrefersBlockingFifthCapturePair(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerRed
+	state.Status = StatusRunning
+	state.CapturedBlue = 8
+	state.Board.Set(1, 4, CellRed)
+	state.Board.Set(2, 4, CellRed)
+	state.Board.Set(3, 4, CellBlue)
+	state.Board.Set(5, 5, CellBlue)
+	state.Board.Set(6, 5, CellBlue)
+	state.Board.Set(7, 5, CellRed)
+	state.recomputeHashes()
+
+	cfg := DefaultConfig()
+	cfg.AiDepth = 4
+	cfg.AiMinDepth = 4
+	cfg.AiMaxDepth = 4
+	cfg.AiTimeBudgetMs = 0
+	cfg.AiTimeoutMs = 0
+	cfg.AiQuickWinExit = false
+	cfg.AiEnableTtPersistence = false
+	cfg.AiLogSearchStats = false
+
+	cache := newAISearchCache()
+	scores := ScoreBoard(state, rules, AIScoreSettings{
+		Depth:           4,
+		TimeoutMs:       0,
+		BoardSize:       settings.BoardSize,
+		Player:          state.ToMove,
+		Cache:           &cache,
+		Config:          cfg,
+		Stats:           &SearchStats{},
+		DirectDepthOnly: true,
+	})
+
+	bestMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+	if !ok {
+		t.Fatalf("expected a legal best move")
+	}
+	if !bestMove.Equals(Move{X: 0, Y: 4}) {
+		t.Fatalf("expected AI to block the fifth capture at (0,4), got %+v", bestMove)
+	}
+}
+
 func TestFindCaptureThreatResponsesIncrementalMatchesScan(t *testing.T) {
 	settings := DefaultGameSettings()
 	settings.BoardSize = 9
@@ -702,26 +904,26 @@ func TestHasDecisiveCaptureThreatDetectsImmediateCaptureWinByCount(t *testing.T)
 	}
 }
 
-func TestCandidateLimitAppliesDeepPlyCaps(t *testing.T) {
+func TestCandidateLimitHalvesEachPlyToMinimumTwo(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AiEnableHardPlyCaps = true
-	cfg.AiMaxCandidates = 24
-	cfg.AiMaxCandidatesPly7 = 16
-	cfg.AiMaxCandidatesPly8 = 12
-	cfg.AiMaxCandidatesPly9 = 8
+	cfg.AiMaxCandidates = 16
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
-	if got := candidateLimit(ctx, 10, 6, false); got != 24 {
-		t.Fatalf("expected hard cap for ply <= 6, got %d", got)
+	if got := candidateLimit(ctx, 10, 0, false); got != 16 {
+		t.Fatalf("expected root cap 16, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 7, false); got != 16 {
-		t.Fatalf("expected ply-7 cap to apply, got %d", got)
+	if got := candidateLimit(ctx, 10, 1, false); got != 8 {
+		t.Fatalf("expected ply-1 cap 8, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 8, false); got != 12 {
-		t.Fatalf("expected ply-8 cap to apply, got %d", got)
+	if got := candidateLimit(ctx, 10, 2, false); got != 4 {
+		t.Fatalf("expected ply-2 cap 4, got %d", got)
 	}
-	if got := candidateLimit(ctx, 10, 9, false); got != 8 {
-		t.Fatalf("expected ply-9 cap to apply, got %d", got)
+	if got := candidateLimit(ctx, 10, 3, false); got != 2 {
+		t.Fatalf("expected ply-3 cap 2, got %d", got)
+	}
+	if got := candidateLimit(ctx, 10, 9, false); got != 2 {
+		t.Fatalf("expected deep cap floor 2, got %d", got)
 	}
 }
 
@@ -729,12 +931,12 @@ func TestCandidateLimitAllowsTacticalLimitToTightenHardCap(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AiEnableHardPlyCaps = true
 	cfg.AiEnableTacticalK = true
-	cfg.AiMaxCandidatesPly9 = 8
-	cfg.AiKTactDeep = 6
+	cfg.AiMaxCandidates = 16
+	cfg.AiKTactDeep = 1
 	ctx := minimaxContext{settings: AIScoreSettings{Config: cfg}}
 
-	if got := candidateLimit(ctx, 10, 9, true); got != 6 {
-		t.Fatalf("expected tactical limit to tighten hard cap, got %d", got)
+	if got := candidateLimit(ctx, 10, 9, true); got != 2 {
+		t.Fatalf("expected tactical limit to respect floor 2, got %d", got)
 	}
 }
 
@@ -1855,6 +2057,450 @@ func TestDebugScoreBoardFixedPositionRedToPlaySixVsFourCaptures(t *testing.T) {
 
 func TestDebugScoreBoardFixedPositionRedSixSixSnapshot(t *testing.T) {
 	runFixedPositionDebugScenario(t, "fixed_red_six_six_snapshot", buildRedToPlaySixSixSnapshotFixedState)
+}
+
+type fixedOrderingScenario struct {
+	name  string
+	build func() (GameState, Rules, GameSettings)
+}
+
+func fixedOrderingScenarios() []fixedOrderingScenario {
+	return []fixedOrderingScenario{
+		{name: "fixed_benchmark", build: buildFixedSearchBenchmarkState},
+		{name: "fixed_quiet_center", build: buildQuietCenterFixedState},
+		{name: "fixed_current_player_tactical", build: buildCurrentPlayerTacticalFixedState},
+		{name: "fixed_current_player_tactical_tempo", build: buildCurrentPlayerTacticalTempoFixedState},
+		{name: "fixed_next_player_tactical", build: buildNextPlayerTacticalFixedState},
+		{name: "fixed_double_blocked_four", build: buildDoubleBlockedFourFixedState},
+		{name: "fixed_protect_capture", build: buildProtectCaptureFixedState},
+		{name: "fixed_multi_threat", build: buildMultiThreatFixedState},
+		{name: "fixed_red_to_play_capture_race", build: buildRedToPlayCaptureRaceFixedState},
+		{name: "fixed_red_to_play_six_vs_four_captures", build: buildRedToPlaySixVsFourCapturesFixedState},
+		{name: "fixed_red_six_six_snapshot", build: buildRedToPlaySixSixSnapshotFixedState},
+		{name: "fixed_capture_instead_of_block", build: buildCaptureInsteadOfBlockFixedState},
+	}
+}
+
+func initialRootOrderForDepth(state GameState, rules Rules, settings GameSettings, cfg Config, depth int) []Move {
+	scoreSettings := AIScoreSettings{
+		Depth:     depth,
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Config:    cfg,
+	}
+	ctx := newMinimaxContext(rules, scoreSettings, stateTimeForTest())
+	attachEvalState(&ctx, state)
+	rootPool := buildRootMovePool(state, ctx, state.ToMove)
+	if len(rootPool) == 0 {
+		return nil
+	}
+	rootMaximizing := state.ToMove == PlayerRed
+	ordered := sortRootMoveIndices(rootPool, rootMaximizing, nil)
+	moves := make([]Move, 0, len(ordered))
+	for _, idx := range ordered {
+		if idx < 0 || idx >= len(rootPool) {
+			continue
+		}
+		moves = append(moves, rootPool[idx].Move)
+	}
+	return moves
+}
+
+func moveRankInList(moves []Move, target Move) int {
+	for i, move := range moves {
+		if move.Equals(target) {
+			return i
+		}
+	}
+	return -1
+}
+
+func buildRandomOrderingBenchmarkCases(tb testing.TB, count int, seed int64) []orderingBenchmarkCase {
+	tb.Helper()
+	if count <= 0 {
+		return nil
+	}
+	rng := rand.New(rand.NewSource(seed))
+	scenarios := []string{
+		benchmarkScenarioComplex,
+		benchmarkScenarioCaptures,
+	}
+	cases := make([]orderingBenchmarkCase, 0, count)
+	for len(cases) < count {
+		scenario := scenarios[rng.Intn(len(scenarios))]
+		state, rules, settings, ok := buildRandomOrderingBenchmarkCase(tb, rng, scenario)
+		if !ok {
+			continue
+		}
+		cases = append(cases, orderingBenchmarkCase{
+			name:     scenario,
+			state:    state,
+			rules:    rules,
+			settings: settings,
+		})
+	}
+	return cases
+}
+
+func buildRandomOrderingBenchmarkCase(tb testing.TB, rng *rand.Rand, scenario string) (GameState, Rules, GameSettings, bool) {
+	tb.Helper()
+	settings := DefaultGameSettings()
+	settings.BoardSize = 19
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	applySeedScenario(tb, &state, rules, scenario)
+	moves := orderedScenarioMoves(settings.BoardSize, scenario)
+	if len(moves) == 0 {
+		return state, rules, settings, false
+	}
+
+	targetExtra := 0
+	switch scenario {
+	case benchmarkScenarioComplex:
+		targetExtra = 8 + rng.Intn(18)
+	case benchmarkScenarioCaptures:
+		targetExtra = 4 + rng.Intn(14)
+	default:
+		targetExtra = 8 + rng.Intn(12)
+	}
+
+	perm := rng.Perm(len(moves))
+	applied := 0
+	for _, idx := range perm {
+		if applied >= targetExtra || state.Status != StatusRunning {
+			break
+		}
+		move := moves[idx]
+		if !move.IsValid(settings.BoardSize) || !state.Board.IsEmpty(move.X, move.Y) {
+			continue
+		}
+		player := state.ToMove
+		if _, ok := applyReplayMove(&state, rules, move, player); !ok {
+			continue
+		}
+		applied++
+	}
+	if applied < 4 || state.Status != StatusRunning {
+		return state, rules, settings, false
+	}
+	state.recomputeHashes()
+	return state, rules, settings, true
+}
+
+func orderingBenchmarkConfig(depth int) Config {
+	cfg := liveAIConfig(DefaultConfig())
+	cfg.AiDepth = depth
+	cfg.AiMinDepth = 1
+	cfg.AiMaxDepth = depth
+	cfg.AiDepthStep = 1
+	cfg.AiLogSearchStats = false
+	return cfg
+}
+
+func collectOrderingBenchmarkDepthResults(benchCase orderingBenchmarkCase, maxDepth int, cfg Config, onDepthComplete func(int, Move)) ([]orderingBenchmarkDepthResult, int, error) {
+	state := benchCase.state.Clone()
+	rules := benchCase.rules
+	settings := benchCase.settings
+	initialOrder := initialRootOrderForDepth(state, rules, settings, cfg, 1)
+	if len(initialOrder) == 0 {
+		return nil, 0, fmt.Errorf("%s: empty initial root order", benchCase.name)
+	}
+	depthMoves := make(map[int]Move, maxDepth)
+	cache := newAISearchCache()
+	stats := &SearchStats{}
+	_ = ScoreBoard(state, rules, AIScoreSettings{
+		Depth:           maxDepth,
+		TimeoutMs:       0,
+		BoardSize:       settings.BoardSize,
+		Player:          state.ToMove,
+		Cache:           &cache,
+		Config:          cfg,
+		Stats:           stats,
+		DirectDepthOnly: false,
+		OnDepthComplete: func(depth int, move Move, score float64) {
+			_ = score
+			depthMoves[depth] = move
+			if onDepthComplete != nil {
+				onDepthComplete(depth, move)
+			}
+		},
+	})
+	results := make([]orderingBenchmarkDepthResult, 0, len(depthMoves))
+	for depth := 1; depth <= stats.CompletedDepths && depth <= maxDepth; depth++ {
+		move, ok := depthMoves[depth]
+		if !ok {
+			continue
+		}
+		rank := moveRankInList(initialOrder, move)
+		if rank < 0 {
+			return nil, 0, fmt.Errorf("%s: depth %d move %+v missing from initial order", benchCase.name, depth, move)
+		}
+		results = append(results, orderingBenchmarkDepthResult{
+			depth:     depth,
+			finalMove: move,
+			rank:      rank,
+		})
+	}
+	return results, len(initialOrder), nil
+}
+
+func summarizeOrderingBenchmark(depth int, results []orderingBenchmarkDepthResult, candidateCounts []int) orderingBenchmarkSummary {
+	summary := orderingBenchmarkSummary{depth: depth, positions: len(results)}
+	if len(results) == 0 {
+		return summary
+	}
+	var top1, top2, top4, top8 int
+	var rankSum, candidateSum int
+	for i, result := range results {
+		rank1 := result.rank + 1
+		rankSum += rank1
+		if i < len(candidateCounts) {
+			candidateSum += candidateCounts[i]
+		}
+		if rank1 > summary.worstRank {
+			summary.worstRank = rank1
+		}
+		if rank1 == 1 {
+			top1++
+		}
+		if rank1 <= 2 {
+			top2++
+		}
+		if rank1 <= 4 {
+			top4++
+		}
+		if rank1 <= 8 {
+			top8++
+		}
+	}
+	summary.avgRank = float64(rankSum) / float64(len(results))
+	summary.avgCandidates = float64(candidateSum) / float64(len(results))
+	summary.top1Pct = float64(top1) * 100.0 / float64(len(results))
+	summary.top2Pct = float64(top2) * 100.0 / float64(len(results))
+	summary.top4Pct = float64(top4) * 100.0 / float64(len(results))
+	summary.top8Pct = float64(top8) * 100.0 / float64(len(results))
+	return summary
+}
+
+func summarizeOrderingAggregate(depth int, agg orderingBenchmarkAggregate) orderingBenchmarkSummary {
+	summary := orderingBenchmarkSummary{
+		depth:     depth,
+		positions: agg.positions,
+		worstRank: agg.worstRank,
+	}
+	if agg.positions == 0 {
+		return summary
+	}
+	summary.avgCandidates = float64(agg.candidateSum) / float64(agg.positions)
+	summary.avgRank = float64(agg.rankSum) / float64(agg.positions)
+	summary.top1Pct = float64(agg.top1Count) * 100.0 / float64(agg.positions)
+	summary.top2Pct = float64(agg.top2Count) * 100.0 / float64(agg.positions)
+	summary.top4Pct = float64(agg.top4Count) * 100.0 / float64(agg.positions)
+	summary.top8Pct = float64(agg.top8Count) * 100.0 / float64(agg.positions)
+	return summary
+}
+
+func writeRootOrderingBenchmarkLog(tb testing.TB, corpusSize int, processed int, seed int64, summaries []orderingBenchmarkSummary) {
+	tb.Helper()
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "root ordering benchmark\n")
+	fmt.Fprintf(&builder, "seed=%d\n", seed)
+	fmt.Fprintf(&builder, "positions_target=%d\n", corpusSize)
+	fmt.Fprintf(&builder, "positions_done=%d\n", processed)
+	fmt.Fprintf(&builder, "depths=%d\n\n", len(summaries))
+	fmt.Fprintf(&builder, "depth positions avg_candidates avg_rank worst_rank top1%% top2%% top4%% top8%%\n")
+	for _, summary := range summaries {
+		fmt.Fprintf(&builder, "%d %d %.3f %.3f %d %.2f %.2f %.2f %.2f\n",
+			summary.depth,
+			summary.positions,
+			summary.avgCandidates,
+			summary.avgRank,
+			summary.worstRank,
+			summary.top1Pct,
+			summary.top2Pct,
+			summary.top4Pct,
+			summary.top8Pct,
+		)
+	}
+	path := "root_ordering_benchmark.log"
+	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		tb.Fatalf("failed to write %s: %v", path, err)
+	}
+}
+
+func collectRootOrderingBenchmarkSummaries(tb testing.TB, maxDepth int, corpus []orderingBenchmarkCase, seed int64) []orderingBenchmarkSummary {
+	tb.Helper()
+	cfg := orderingBenchmarkConfig(maxDepth)
+	aggregates := make(map[int]orderingBenchmarkAggregate, maxDepth)
+	progressStep := benchmarkProgressStep(len(corpus))
+	logBenchmarkProgress("collect start positions=%d max_depth=%d", len(corpus), maxDepth)
+	for i, benchCase := range corpus {
+		logBenchmarkProgress("collect position start %d/%d scenario=%s", i+1, len(corpus), benchCase.name)
+		results, orderCount, err := collectOrderingBenchmarkDepthResults(benchCase, maxDepth, cfg, func(depth int, move Move) {
+			logBenchmarkProgress("collect position %d/%d scenario=%s depth=%d move=(%d,%d)", i+1, len(corpus), benchCase.name, depth, move.X, move.Y)
+		})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		for _, result := range results {
+			agg := aggregates[result.depth]
+			rank1 := result.rank + 1
+			agg.positions++
+			agg.candidateSum += orderCount
+			agg.rankSum += rank1
+			if rank1 > agg.worstRank {
+				agg.worstRank = rank1
+			}
+			if rank1 == 1 {
+				agg.top1Count++
+			}
+			if rank1 <= 2 {
+				agg.top2Count++
+			}
+			if rank1 <= 4 {
+				agg.top4Count++
+			}
+			if rank1 <= 8 {
+				agg.top8Count++
+			}
+			aggregates[result.depth] = agg
+		}
+		summaries := make([]orderingBenchmarkSummary, 0, maxDepth)
+		for depth := 1; depth <= maxDepth; depth++ {
+			summaries = append(summaries, summarizeOrderingAggregate(depth, aggregates[depth]))
+		}
+		writeRootOrderingBenchmarkLog(tb, len(corpus), i+1, seed, summaries)
+		depth10 := summaries[maxDepth-1]
+		if depth10.positions > 0 {
+			logBenchmarkProgress("collect cumulative %d/%d depth10 avg_rank=%.3f worst=%d top8=%.2f%% avg_candidates=%.2f",
+				i+1, len(corpus), depth10.avgRank, depth10.worstRank, depth10.top8Pct, depth10.avgCandidates)
+		}
+		if (i+1)%progressStep == 0 || i+1 == len(corpus) {
+			logBenchmarkProgress("collect progress %d/%d scenario=%s", i+1, len(corpus), benchCase.name)
+		}
+	}
+	summaries := make([]orderingBenchmarkSummary, 0, maxDepth)
+	for depth := 1; depth <= maxDepth; depth++ {
+		summaries = append(summaries, summarizeOrderingAggregate(depth, aggregates[depth]))
+	}
+	logBenchmarkProgress("collect done positions=%d depths=1..%d", len(corpus), maxDepth)
+	return summaries
+}
+
+func runRootOrderingBenchmarkCorpus(b *testing.B, depth int, corpus []orderingBenchmarkCase) orderingBenchmarkSummary {
+	b.Helper()
+	if depth <= 0 {
+		b.Fatalf("invalid depth %d", depth)
+	}
+	summaries := collectRootOrderingBenchmarkSummaries(b, depth, corpus, 0xC0FFEE)
+	summary := summaries[depth-1]
+	b.ReportMetric(float64(len(corpus)), "positions")
+	b.ReportMetric(summary.avgCandidates, "avg_candidates")
+	b.ReportMetric(summary.avgRank, "avg_rank")
+	b.ReportMetric(float64(summary.worstRank), "worst_rank")
+	b.ReportMetric(summary.top1Pct, "top1_%")
+	b.ReportMetric(summary.top2Pct, "top2_%")
+	b.ReportMetric(summary.top4Pct, "top4_%")
+	b.ReportMetric(summary.top8Pct, "top8_%")
+	return summary
+}
+
+func TestFixedPositionInitialOrderingReport(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AiDepth = 8
+	cfg.AiMinDepth = 8
+	cfg.AiMaxDepth = 8
+	cfg.AiDepthStep = 1
+	cfg.AiTimeBudgetMs = 0
+	cfg.AiTimeoutMs = 0
+	cfg.AiQuickWinExit = false
+	cfg.AiUseTtCache = false
+	cfg.AiEnableRootTranspose = false
+	cfg.AiEnableTtPersistence = false
+	cfg.AiLogSearchStats = false
+	cfg.AiLazySMPWorkers = 1
+
+	type orderingResult struct {
+		name       string
+		finalMove  Move
+		rank       int
+		orderCount int
+	}
+	results := make([]orderingResult, 0, len(fixedOrderingScenarios()))
+	maxRank := -1
+	top8Count := 0
+
+	for _, scenario := range fixedOrderingScenarios() {
+		state, rules, settings := scenario.build()
+		initialOrder := initialRootOrderForDepth(state, rules, settings, cfg, 1)
+		if len(initialOrder) == 0 {
+			t.Fatalf("%s: expected non-empty initial root order", scenario.name)
+		}
+
+		cache := newAISearchCache()
+		stats := &SearchStats{}
+		scores := ScoreBoard(state, rules, AIScoreSettings{
+			Depth:           cfg.AiDepth,
+			TimeoutMs:       0,
+			BoardSize:       settings.BoardSize,
+			Player:          state.ToMove,
+			Cache:           &cache,
+			Config:          cfg,
+			Stats:           stats,
+			DirectDepthOnly: false,
+		})
+		finalMove, ok := bestMoveFromScores(scores, state, rules, settings.BoardSize)
+		if !ok {
+			t.Fatalf("%s: expected final best move", scenario.name)
+		}
+		rank := moveRankInList(initialOrder, finalMove)
+		if rank < 0 {
+			t.Fatalf("%s: final move %+v not found in depth-1 root order of %d moves", scenario.name, finalMove, len(initialOrder))
+		}
+		if rank > maxRank {
+			maxRank = rank
+		}
+		if rank < 8 {
+			top8Count++
+		}
+		results = append(results, orderingResult{
+			name:       scenario.name,
+			finalMove:  finalMove,
+			rank:       rank,
+			orderCount: len(initialOrder),
+		})
+		t.Logf("%s: final=(%d,%d) rank=%d/%d completed_depth=%d returned_depth=%d",
+			scenario.name,
+			finalMove.X, finalMove.Y,
+			rank+1, len(initialOrder),
+			stats.CompletedDepths, stats.ReturnedDepth,
+		)
+	}
+
+	t.Logf("ordering summary: scenarios=%d top8=%d/%d worst_rank=%d",
+		len(results), top8Count, len(results), maxRank+1,
+	)
+}
+
+func BenchmarkRootOrderingRandomCorpus(b *testing.B) {
+	corpusSize := benchmarkCorpusSize()
+	seed := int64(0xC0FFEE)
+	maxDepth := 10
+	corpus := buildRandomOrderingBenchmarkCases(b, corpusSize, seed)
+	summaries := collectRootOrderingBenchmarkSummaries(b, maxDepth, corpus, seed)
+	writeRootOrderingBenchmarkLog(b, corpusSize, corpusSize, seed, summaries)
+	summary := summaries[maxDepth-1]
+	b.ReportMetric(float64(corpusSize), "positions")
+	b.ReportMetric(summary.avgCandidates, "avg_candidates")
+	b.ReportMetric(summary.avgRank, "avg_rank")
+	b.ReportMetric(float64(summary.worstRank), "worst_rank")
+	b.ReportMetric(summary.top1Pct, "top1_%")
+	b.ReportMetric(summary.top2Pct, "top2_%")
+	b.ReportMetric(summary.top4Pct, "top4_%")
+	b.ReportMetric(summary.top8Pct, "top8_%")
 }
 
 func TestProtectCaptureFixedSelectionKeepsRootBestAtFullDepth(t *testing.T) {
@@ -3992,4 +4638,208 @@ func formatRootThreatFlagsForTest(flags uint32) string {
 
 func stateTimeForTest() time.Time {
 	return time.Now()
+}
+
+// buildCaptureInsteadOfBlockFixedState sets up the position where Red should
+// capture Blue stones 11=(8,7) and 5=(7,8) by playing at (9,6), rather than
+// continuing its own vertical column at (9,11). The capture:
+//  1. Removes two Blue stones from their diagonal alignment (breaking Blue's threat)
+//  2. Creates Red's own Closed4 on that diagonal
+//  3. Advances Red's capture count
+func buildCaptureInsteadOfBlockFixedState() (GameState, Rules, GameSettings) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 19
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerRed
+	for _, stone := range []struct {
+		x, y int
+		cell Cell
+	}{
+		{10, 5, CellBlue}, // 7
+		{9, 6, CellBlue},  // 15
+		{8, 7, CellBlue},  // 11
+		{9, 7, CellBlue},  // 9
+		{7, 8, CellBlue},  // 5
+		{9, 8, CellRed},   // 8
+		{6, 9, CellRed},   // 14
+		{9, 9, CellRed},   // 6
+		{9, 10, CellRed},  // 10
+		{9, 11, CellRed},  // 12
+		{9, 12, CellBlue}, // 13
+	} {
+		state.Board.Set(stone.x, stone.y, stone.cell)
+	}
+	state.recomputeHashes()
+	return state, rules, settings
+}
+
+// TestCaptureInsteadOfBlockPrefersCapturingThreatStones verifies that Red
+// plays (9,5) to capture Blue (9,6)+(9,7) — which are part of Blue's diagonal
+// Closed4 (10,5)-(9,6)-(8,7)-(7,8) — rather than simply blocking at (11,4).
+// The capture is strictly better: it removes two alignment stones (breaking the
+// Closed4), gains material, and forces the opponent to rebuild.
+func TestCaptureInsteadOfBlockPrefersCapturingThreatStones(t *testing.T) {
+	state, rules, settings := buildCaptureInsteadOfBlockFixedState()
+	cfg := DefaultConfig()
+	cfg.AiDepth = 10
+	cfg.AiMinDepth = 2
+	cfg.AiMaxDepth = 10
+	cfg.AiDepthStep = 1
+	cfg.AiTimeBudgetMs = 0
+	cfg.AiTimeoutMs = 0
+	cfg.AiLogSearchStats = false
+
+	FlushGlobalCaches()
+	cache := newAISearchCache()
+	scores := ScoreBoard(state, rules, AIScoreSettings{
+		Depth:           cfg.AiDepth,
+		TimeoutMs:       0,
+		BoardSize:       settings.BoardSize,
+		Player:          state.ToMove,
+		Cache:           &cache,
+		Config:          cfg,
+		DirectDepthOnly: false,
+		Stats:           &SearchStats{},
+	})
+
+	// (9,5) captures Blue (9,6)+(9,7): R(9,5)-B(9,6)-B(9,7)-R(9,8)
+	capture := Move{X: 9, Y: 5}
+	// (11,4) merely blocks Blue's Closed4 extension without gaining material
+	block := Move{X: 11, Y: 4}
+	captureScore := scoreForMove(scores, capture, settings.BoardSize)
+	blockScore := scoreForMove(scores, block, settings.BoardSize)
+	if captureScore <= blockScore {
+		t.Fatalf("expected capture move %v (%.2f) to outscore plain block %v (%.2f)",
+			capture, captureScore, block, blockScore)
+	}
+}
+
+func TestDebugScoreBoardFixedPositionCaptureInsteadOfBlock(t *testing.T) {
+	runFixedPositionDebugScenario(t, "fixed_capture_instead_of_block", buildCaptureInsteadOfBlockFixedState, Move{X: 9, Y: 5})
+}
+
+func TestCaptureInsteadOfBlockForcedBlockAfterBroken3(t *testing.T) {
+	// After R(11,4) B(9,5) R(10,7) B(7,7) R(7,9), Red has row-y=9 pattern:
+	// (6,9)-(7,9)-(gap at 8,9)-(9,9) = Broken3.
+	// Playing (8,9) creates Red's Open4 — Blue MUST block at (8,9).
+	settings := DefaultGameSettings()
+	settings.BoardSize = 19
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.Status = StatusRunning
+	state.ToMove = PlayerBlue // Blue to move after the sequence
+
+	// Initial setup
+	for _, s := range []struct {
+		x, y int
+		cell Cell
+	}{
+		{10, 5, CellBlue}, {9, 6, CellBlue}, {8, 7, CellBlue}, {9, 7, CellBlue},
+		{7, 8, CellBlue}, {9, 8, CellRed}, {6, 9, CellRed}, {9, 9, CellRed},
+		{9, 10, CellRed}, {9, 11, CellRed}, {9, 12, CellBlue},
+	} {
+		state.Board.Set(s.x, s.y, s.cell)
+	}
+	// Apply R(11,4) B(9,5) R(10,7) B(7,7) R(7,9)
+	for _, mv := range []struct {
+		x, y int
+		cell Cell
+	}{
+		{11, 4, CellRed}, {9, 5, CellBlue}, {10, 7, CellRed},
+		{7, 7, CellBlue}, {7, 9, CellRed},
+	} {
+		state.Board.Set(mv.x, mv.y, mv.cell)
+	}
+	state.recomputeHashes()
+
+	cfg := DefaultConfig()
+	ctx := newMinimaxContext(rules, AIScoreSettings{
+		Depth: 3, BoardSize: settings.BoardSize, Player: state.ToMove, Config: cfg,
+	}, time.Now())
+	attachEvalState(&ctx, state)
+
+	context := AnalyzeThreats(state, rules, ctx.settings, state.ToMove, ctx.evalState)
+
+	block89 := Move{X: 8, Y: 9}
+	if !moveListContains(context.MustBlockMoves, block89) {
+		t.Errorf("expected (8,9) in MustBlockMoves (Red Broken3→Open4 in row y=9); got %v", context.MustBlockMoves)
+	}
+	_, _, hardRestricted := chooseNodeCandidatesFromThreatContext(state, ctx, state.ToMove, false, 5, 16, nil, context)
+	if !hardRestricted {
+		t.Errorf("expected hard tactical restriction forcing Blue to block at (8,9)")
+	}
+}
+
+func TestCaptureInsteadOfBlockDiagnostic(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		workers int
+		depth   int
+	}{
+		{"d6_w1", 1, 6},
+		{"d7_w1", 1, 7},
+		{"d8_w1", 1, 8},
+		{"d9_w1", 1, 9},
+		{"d10_w1", 1, 10},
+		{"d10_w4", 4, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, rules, settings := buildCaptureInsteadOfBlockFixedState()
+			cfg := DefaultConfig()
+			cfg.AiDepth = tc.depth
+			cfg.AiMinDepth = 2
+			cfg.AiMaxDepth = tc.depth
+			cfg.AiDepthStep = 1
+			cfg.AiTimeBudgetMs = 0
+			cfg.AiTimeoutMs = 0
+			cfg.AiLazySMPWorkers = tc.workers
+			cfg.AiLogSearchStats = false
+
+			capture := Move{X: 9, Y: 5}
+			block := Move{X: 11, Y: 4}
+
+			var bestMove Move
+			var bestLine *SearchDebugLine
+			FlushGlobalCaches()
+			cache := newAISearchCache()
+			scores := ScoreBoard(state, rules, AIScoreSettings{
+				Depth:           cfg.AiDepth,
+				TimeoutMs:       0,
+				BoardSize:       settings.BoardSize,
+				Player:          state.ToMove,
+				Cache:           &cache,
+				Config:          cfg,
+				DirectDepthOnly: true,
+				Stats:           &SearchStats{},
+				OnDepthCompleteDebug: func(depth int, move Move, score float64, line *SearchDebugLine) {
+					if depth == tc.depth && (move == capture || move == block) {
+						bestMove = move
+						bestLine = line
+					}
+				},
+			})
+
+			captureScore := scoreForMove(scores, capture, settings.BoardSize)
+			blockScore := scoreForMove(scores, block, settings.BoardSize)
+			t.Logf("%s: capture(9,5)=%.2f block(11,4)=%.2f bestMove=%v", tc.name, captureScore, blockScore, bestMove)
+			if bestLine != nil {
+				steps := make([]string, 0, len(bestLine.Steps))
+				for _, s := range bestLine.Steps {
+					player := "R"
+					if s.Player == PlayerBlue {
+						player = "B"
+					}
+					steps = append(steps, fmt.Sprintf("%s(%d,%d)", player, s.Move.X, s.Move.Y))
+				}
+				t.Logf("  line: %v", steps)
+			}
+		})
+	}
 }

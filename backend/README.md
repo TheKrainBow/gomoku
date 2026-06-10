@@ -438,16 +438,40 @@ When `depth == 0` (and quiescence does not extend), `evaluateStateHeuristic` com
 
 ### Score Convention
 
-The score is always **Blue-positive / Red-negative**. A score of `+winScore` means Blue wins; `-winScore` means Red wins.
+The score is always **Red-positive / Blue-negative**.
+
+- `+winScore` means **Red wins**
+- `-winScore` means **Blue wins**
+
+This is consistent across:
+
+- `evaluateStateHeuristicWithEvaluator()`
+- `EvalState.Score = StructuralScore + CaptureScore + ComboScore`
+- `captureAdvancementScore()`, which returns `red - blue`
+- `forkComboScore()`, which rewards Red forks and penalizes Blue forks
 
 ### Structural Score
 
 Computed by `EvalState.ScoreOnly()` using the incrementally maintained threat counts:
 
 ```
-structuralScore = Σ(weight[threatType] × count[Blue][threatType])
-                - Σ(weight[threatType] × count[Red][threatType])
+structuralScore = Σ(weight[threatType] × count[Red][threatType])
+                - Σ(weight[threatType] × count[Blue][threatType])
 ```
+
+The pattern counts are maintained for **both players** at all times (`PatternCounts[0]` for Blue, `PatternCounts[1]` for Red), and the final evaluation is always the difference `Red - Blue`.
+
+### Heuristic Model
+
+The heuristic combines a static board evaluation with a small dynamic locality term. The static part is built from incrementally maintained pattern counts stored in `EvalState.PatternCounts`. It scores current alignments through explicit shape classes such as `PatternWin5`, `PatternOpen4`, `PatternClosed4`, `PatternBroken4`, `PatternOpen3`, `PatternBroken3`, `PatternClosed3`, `PatternOpen2`, `PatternClosed2`, and `PatternBroken2`. This does not just count stone runs: it values only shapes that still have enough geometric space to become a valid five-in-a-row, and it distinguishes their freedom. Open shapes represent two-sided freedom, closed shapes represent one-sided freedom, and broken shapes represent extendable but gapped structures, so a fully open threat is worth more than a blocked or cramped one.
+
+Capture play is evaluated as a first-class component of the position. The evaluator includes the current number of captured stones for each player, immediate capture availability through capture windows and capture references, acceleration toward the capture-win threshold through `CaptureNearWin` and `CaptureInTwo`, double-capture pressure through `CaptureDoubleThreat`, and defensive vulnerability through the `HangingPair` penalty. The capture score grows with both the current material advantage in captures and the number of realistic capture continuations still present on the board.
+
+The heuristic also values advantageous combinations of threats rather than isolated patterns only. `forkComboScore()` rewards positions that create simultaneous strong threats such as double-open-threes, double-fours, or mixed four-based combinations, and the tactical summary tracks concepts such as immediate wins, capture wins, critical capture races, and double threats. This makes the evaluation sensitive to positions where one move forces multiple answers at once.
+
+All of these terms are evaluated for both players and combined as a differential score, so the leaf value always reflects the balance `Red - Blue` rather than a one-sided current-player estimate. Structural patterns, capture progression, tactical combinations, and terminal states are all measured symmetrically before the final score is formed.
+
+The dynamic part is intentionally light. `GameState.HasLastMove` and `GameState.LastMove` are preserved in the search state, and `heuristicForMove()` applies a small `LastMoveNeighbor` bonus to moves played near the most recent move. The bonus decays with Manhattan distance and is only meant to slightly favor local replies around the latest point of tension. It is a tie-break and move-ordering nudge, not a substitute for the structural and tactical evaluation.
 
 ### Heuristic Weights (exact values from `DefaultConfig`)
 
@@ -456,19 +480,20 @@ structuralScore = Σ(weight[threatType] × count[Blue][threatType])
 | Open-4 | 131 633.82 |
 | Fork (four+) | 130 181.77 |
 | Fork (Open-3) | 42 035.41 |
-| Capture near win | 35 000.00 |
+| Capture near win | 120 000.00 |
+| Capture now | 38 000.00 |
+| Capture double threat | 55 000.00 |
 | Open-3 | 19 124.54 |
-| Capture now (1 pair) | 18 000.00 |
 | Closed-4 | 23 451.26 |
-| Capture double threat | 15 000.00 |
-| Hanging pair | 14 000.00 |
 | Broken-4 | 16 588.89 |
 | Broken-3 | 11 377.93 |
-| Capture in two | 4 000.00 |
+| Capture in two | 12 000.00 |
+| Hanging pair | 3 000.00 |
 | Open-2 | 400.71 |
 | Closed-3 | 802.11 |
 | Broken-2 | 215.28 |
 | Closed-2 | -600.00 |
+| Last-move neighbor | 24.00 |
 
 Note: `Closed-2` is **negative** — a blocked two-stone sequence is a liability, not an asset.
 
@@ -477,8 +502,10 @@ Note: `Closed-2` is **negative** — a blocked two-stone sequence is a liability
 On top of the structural score, several adjustments are made:
 
 - **Fork bonus** — when a single move creates two simultaneous threats of tier ≥ Strong, a large bonus is added (`ForkOpen3` or `ForkFourPlus`).
-- **Capture urgency** — when Blue's capture count is close to the win threshold, `CaptureNearWin` bonus is added; when it is 2 captures away, `CaptureInTwo` applies.
+- **Capture urgency** — when a player approaches the capture-win threshold, `CaptureNearWin` grows exponentially; if several capture continuations exist, `CaptureInTwo` also applies.
 - **Double-capture threat** — when a move would capture and also set up a second capture fork, `CaptureDoubleThreat` is added.
+- **Hanging pair penalty** — pairs that are themselves capturable are penalized via `HangingPair`.
+- **Last-move locality** — candidate moves near `LastMove` receive a very small `LastMoveNeighbor` bonus to slightly prefer immediate local replies.
 
 ### Eval Cache
 
@@ -592,4 +619,4 @@ All settings live in `config.go` and can be changed via the `/api/config` endpoi
 
 ### Heuristic Weights
 
-All pattern weights are under `Heuristics` in config (see exact values in [Step 8](#11-step-8--leaf-evaluation) above). They can be overridden per-player via `POST /api/start` with `settings.blue_heuristics` / `settings.red_heuristics`.
+All pattern weights are under `Heuristics` in config (see exact values in [Step 8](#11-step-8--leaf-evaluation) above). This includes the dynamic locality term `LastMoveNeighbor`. They can be overridden per-player via `POST /api/start` with `settings.blue_heuristics` / `settings.red_heuristics`.

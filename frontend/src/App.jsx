@@ -13,7 +13,8 @@ const defaultStatus = {
     ai_max_depth: 5,
     ai_quick_win_exit: true,
     ai_tt_max_entries: 200000,
-    ai_analitics_top_boards: 10
+    ai_analitics_top_boards: 10,
+    ai_enable_queue: true
   },
   board: [],
   next_player: 1,
@@ -989,6 +990,14 @@ export default function App() {
                   onChange={(event) => handleSettingsChange('ai_use_tt_cache', event.target.checked)}
                 />
                 Use TT Cache
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={status.config.ai_enable_queue ?? true}
+                  onChange={(event) => handleSettingsChange('ai_enable_queue', event.target.checked)}
+                />
+                Background analysis
               </label>
             </div>
             <div className="actions">

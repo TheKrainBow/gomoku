@@ -1211,6 +1211,8 @@ type ThreatContext struct {
 	OppThreats           []Threat
 	OwnBestTier          ThreatTier
 	OppBestTier          ThreatTier
+	OwnBestPattern       PatternType
+	OppBestPattern       PatternType
 	WinningMoves         []Move
 	MustPlayMoves        []Move
 	MustPlayDetails      []ThreatResponseMove
@@ -2504,6 +2506,8 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 	if evalState != nil {
 		context.OwnBestTier = bestThreatTierFromSummary(eval.Summary, sideToMove)
 		context.OppBestTier = bestThreatTierFromSummary(eval.Summary, otherPlayer(sideToMove))
+		context.OwnBestPattern = bestThreatPatternFromSummary(eval.Summary, sideToMove)
+		context.OppBestPattern = bestThreatPatternFromSummary(eval.Summary, otherPlayer(sideToMove))
 	} else {
 		urgencyStart := time.Now()
 		for i := range context.OwnThreats {
@@ -2514,6 +2518,8 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 		}
 		context.OwnBestTier = bestThreatTier(context.OwnThreats)
 		context.OppBestTier = bestThreatTier(context.OppThreats)
+		context.OwnBestPattern = bestThreatPattern(context.OwnThreats)
+		context.OppBestPattern = bestThreatPattern(context.OppThreats)
 		if stats != nil {
 			stats.AnalyzeThreatUrgencyTime += time.Since(urgencyStart)
 		}
@@ -2525,7 +2531,6 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 		selfWin, selfMustPlay, selfCounter, selfFork, selfCaptureRace, _, _ := evalStateThreatResponseArrays(evalState, sideToMove)
 		_, _, _, _, _, oppMustBlock, oppPreventFork := evalStateThreatResponseArrays(evalState, otherPlayer(sideToMove))
 		bestOwnPattern := bestThreatPatternFromSummary(eval.Summary, sideToMove)
-		bestOppPattern := bestThreatPatternFromSummary(eval.Summary, otherPlayer(sideToMove))
 		context.WinningMoves = uniqueMoves(responseMovesFromScores(state, selfWin, settings.BoardSize), settings.BoardSize)
 		context.MustPlayMoves = append(context.MustPlayMoves, responseMovesFromScores(state, selfMustPlay, settings.BoardSize)...)
 		context.MustPlayDetails = append(context.MustPlayDetails, responseDetailsFromScoresWithPattern(state, selfMustPlay, settings.BoardSize, ThreatResponseMustPlay, bestOwnPattern)...)
@@ -2535,12 +2540,11 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 		context.CounterThreatMoves = append(context.CounterThreatMoves, responseMovesFromScores(state, selfCounter, settings.BoardSize)...)
 		context.ForkMoves = append(context.ForkMoves, responseMovesFromScores(state, selfFork, settings.BoardSize)...)
 		context.MustBlockMoves = append(context.MustBlockMoves, responseMovesFromScores(state, oppMustBlock, settings.BoardSize)...)
-		// Only treat opponent moves as forced blocks for decisive threats (Win5/Open4/Closed4/Broken4).
-		// Open3 and below must not restrict the search to defensive-only candidates; they belong
-		// in the candidate pool where the minimax can freely compare them against counter-threats.
-		if isDecisiveBlockPattern(bestOppPattern) {
-			context.MustBlockDetails = append(context.MustBlockDetails, responseDetailsFromScoresWithPattern(state, oppMustBlock, settings.BoardSize, ThreatResponseMustBlock, bestOppPattern)...)
-		}
+		// Use per-cell patterns (via mustResponsePattern) so that a cell scored as Open4
+		// (score>=90) is treated as a decisive block even when the board's global best
+		// opponent pattern is only Broken3. selectedMustBlockMoves still filters to
+		// decisive-only patterns, so Open3 and below are never hard-restricted.
+		context.MustBlockDetails = append(context.MustBlockDetails, responseDetailsFromScores(state, oppMustBlock, settings.BoardSize, ThreatResponseMustBlock)...)
 		context.PreventForkMoves = append(context.PreventForkMoves, responseMovesFromScores(state, oppPreventFork, settings.BoardSize)...)
 	} else {
 		context.WinningMoves = uniqueMoves(findImmediateWinMovesCached(cache, state, rules, sideToMove, settings.BoardSize, settings.Config), settings.BoardSize)
@@ -2631,6 +2635,24 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 			}
 			if threat.ForkPotential {
 				context.PreventForkMoves = append(context.PreventForkMoves, defenses...)
+			}
+		}
+	}
+	// Captures that remove a stone from an opponent's threatening alignment are
+	// valid blocking alternatives: the alignment is disrupted and the opponent
+	// must spend at least one extra move to rebuild it.
+	if len(ownImmediateCaptures) > 0 && context.OppBestTier >= TierMustAnswer {
+		for _, cap := range ownImmediateCaptures {
+			var isAlignmentCapture bool
+			if len(context.OppThreats) > 0 {
+				isAlignmentCapture = captureTargetsThreatAlignmentStone(state.Board, rules, cap, sideToMove, context.OppThreats, settings.BoardSize)
+			} else if evalState != nil {
+				// evalState path: OppThreats not populated; use line-level threat
+				// check as a proxy (captured stone is on a threatening line).
+				isAlignmentCapture = isDefensiveCapture(state.Board, rules, cap, sideToMove, evalState)
+			}
+			if isAlignmentCapture {
+				context.MustBlockMoves = append(context.MustBlockMoves, cap)
 			}
 		}
 	}
@@ -2809,15 +2831,17 @@ func buildRootMovePool(state GameState, ctx minimaxContext, currentPlayer Player
 		// Classify capture: defensive (removes opponent threat stones) or free.
 		// Defensive captures are ordered alongside block moves (prioBlockWin, ForcedThreat
 		// flag) so the search tries them before non-defensive alignment moves.
-		// Free captures are still forced=true so they always survive pool restrictions,
-		// but they sort after block/defensive moves.
+		// When opponent has TierMustAnswer threats (Broken4/Open3/Closed4), only defensive
+		// captures are forced — non-defensive captures must not skip the forced defense.
+		// For weaker opponent threats, all captures remain forced so they compete freely.
 		defensive := threatContext.OppBestTier >= TierMustAnswer &&
 			isDefensiveCapture(state.Board, ctx.rules, move, currentPlayer, ctx.evalState)
 		prio := prioCaptureCreate
 		if defensive {
 			prio = prioBlockWin
 		}
-		builder.addMove(move, rootSourceCaptureOwn, prio, true, func(rm *RootMove) {
+		captureForced := defensive || threatContext.OppBestTier < TierMustAnswer
+		builder.addMove(move, rootSourceCaptureOwn, prio, captureForced, func(rm *RootMove) {
 			captured := captureStoneCountForMove(state.Board, ctx.rules, move, currentPlayer)
 			rm.ThreatFlags |= rootThreatCaptureCreate
 			if defensive {
@@ -2960,11 +2984,13 @@ func shouldRestrictRootPoolToForcing(context ThreatContext, rootMoves []RootMove
 	if len(rootMoves) == 0 {
 		return false
 	}
-	// When the opponent's threat is below TierCritical (i.e. Open3/Closed4 —
-	// TierMustAnswer) and captures are available, do not restrict: the AI must
-	// choose between blocking and advancing the capture race. Restricting to
-	// forced-only moves here would silently drop captures from the root pool.
-	if context.OppBestTier < TierCritical && len(context.CaptureMoves) > 0 {
+	// When the opponent's threat is below TierMustAnswer (i.e. Broken3 or lower)
+	// and captures are available, allow captures to compete freely — the position
+	// is not urgently threatening so the AI can prioritise the capture race.
+	// For TierMustAnswer (Broken4/Open3/Closed4) and above, force defense even
+	// when captures exist; the only exceptions are defensive captures (which are
+	// already marked forced) and winning/must-play sequences handled earlier.
+	if context.OppBestTier < TierMustAnswer && len(context.CaptureMoves) > 0 {
 		return false
 	}
 	if len(context.WinningMoves) > 0 || len(selectedMustBlockMoves(context, boardSize)) > 0 {
@@ -2977,15 +3003,24 @@ func shouldRestrictRootPoolToMustPlay(context ThreatContext, boardSize int) bool
 	if len(context.WinningMoves) > 0 {
 		return false
 	}
-	// Strict: only skip blocking when own threat is strictly stronger than opponent's.
-	// Equal tiers (e.g. both Open3) keep block moves in the pool so the search
-	// can weigh attacking vs. defending rather than being forced into pure attack.
-	return len(selectedMustPlayMoves(context, boardSize)) > 0 && context.OppBestTier < context.OwnBestTier
+	if len(selectedMustPlayMoves(context, boardSize)) == 0 {
+		return false
+	}
+	// Use movesToWin rather than the tier enum so that Open4 and Closed4/Broken4
+	// (both movesToWin=1) are treated equally. The opponent plays next, so when
+	// both sides have the same movesToWin we must defend first.
+	// Only skip defense when own threat wins in STRICTLY FEWER moves.
+	ownMoves := movesToWinForPattern(context.OwnBestPattern)
+	oppMoves := movesToWinForPattern(context.OppBestPattern)
+	if ownMoves < 0 || oppMoves <= 0 {
+		return false
+	}
+	return ownMoves < oppMoves
 }
 
 // shouldRestrictRootPoolToCounterAttack returns true when the AI has counter-threats
-// (fork or Open3 creation moves) strictly stronger than the opponent's threats.
-// In that case, focus the root pool on own attacks rather than defensive blocking.
+// (fork or Open3 creation moves) that win in STRICTLY FEWER moves than the opponent's
+// best threat. In that case, focus the root pool on own attacks rather than blocking.
 func shouldRestrictRootPoolToCounterAttack(context ThreatContext, boardSize int) bool {
 	if len(context.WinningMoves) > 0 || len(selectedMustPlayMoves(context, boardSize)) > 0 {
 		return false // already handled by other restrictions
@@ -2994,10 +3029,14 @@ func shouldRestrictRootPoolToCounterAttack(context ThreatContext, boardSize int)
 	if !ownHasTactical {
 		return false
 	}
-	// Strict: only counter-attack when own tier is strictly above opponent's.
-	// Equal tiers (e.g. both Open3) keep block moves in the pool so the search
-	// decides whether to attack or defend.
-	return context.OwnBestTier >= TierStrong && context.OwnBestTier > context.OppBestTier
+	// Use movesToWin so Open4 and Closed4/Broken4 are treated equally (both need
+	// 1 move). Only counter-attack when own wins in STRICTLY FEWER moves.
+	ownMoves := movesToWinForPattern(context.OwnBestPattern)
+	oppMoves := movesToWinForPattern(context.OppBestPattern)
+	if ownMoves < 0 || oppMoves <= 0 {
+		return false
+	}
+	return ownMoves < oppMoves
 }
 
 func limitRootMovePoolToMoves(builder *rootMoveBuilder, moves []Move) {
@@ -4439,28 +4478,17 @@ func collectCandidateMoves(state GameState, rules Rules, currentPlayer PlayerCol
 // ================================================================
 
 func hardPlyCandidateCap(config Config, depthFromRoot int) int {
-	switch {
-	case depthFromRoot >= 9:
-		if config.AiMaxCandidatesPly9 > 0 {
-			return config.AiMaxCandidatesPly9
-		}
-		return 8
-	case depthFromRoot == 8:
-		if config.AiMaxCandidatesPly8 > 0 {
-			return config.AiMaxCandidatesPly8
-		}
-		return 12
-	case depthFromRoot == 7:
-		if config.AiMaxCandidatesPly7 > 0 {
-			return config.AiMaxCandidatesPly7
-		}
-		return 16
-	default:
-		if config.AiMaxCandidates > 0 {
-			return config.AiMaxCandidates
-		}
-		return 24
+	limit := config.AiMaxCandidates
+	if limit <= 0 {
+		limit = 16
 	}
+	for ply := 0; ply < depthFromRoot; ply++ {
+		limit /= 2
+		if limit <= 2 {
+			return 2
+		}
+	}
+	return limit
 }
 
 func tacticalKLimit(config Config, depthFromRoot int) int {
@@ -4485,6 +4513,9 @@ func candidateLimit(ctx minimaxContext, depthLeft, depthFromRoot int, tactical b
 				limit = tacticalLimit
 			}
 		}
+		if limit > 0 && limit < 2 {
+			limit = 2
+		}
 		return limit
 	}
 
@@ -4505,18 +4536,8 @@ func candidateLimit(ctx minimaxContext, depthLeft, depthFromRoot int, tactical b
 		limit = config.AiMaxCandidates
 	}
 
-	if depthFromRoot >= 9 && config.AiMaxCandidatesPly9 > 0 {
-		if limit <= 0 || config.AiMaxCandidatesPly9 < limit {
-			limit = config.AiMaxCandidatesPly9
-		}
-	} else if depthFromRoot >= 8 && config.AiMaxCandidatesPly8 > 0 {
-		if limit <= 0 || config.AiMaxCandidatesPly8 < limit {
-			limit = config.AiMaxCandidatesPly8
-		}
-	} else if depthFromRoot >= 7 && config.AiMaxCandidatesPly7 > 0 {
-		if limit <= 0 || config.AiMaxCandidatesPly7 < limit {
-			limit = config.AiMaxCandidatesPly7
-		}
+	if limit > 0 && limit < 2 {
+		return 2
 	}
 	return limit
 }
@@ -5387,7 +5408,33 @@ func heuristicForMove(state GameState, rules Rules, settings AIScoreSettings, mo
 	cache := selectCache(minimaxContext{settings: settings})
 	score := evalBoardCached(next, rules, settings, cache, evalState)
 	undoMoveWithUndo(&next, evalState, undo)
+	score += lastMoveNeighborBonus(state, move, settings.Config)
 	return score
+}
+
+func lastMoveNeighborBonus(state GameState, move Move, config Config) float64 {
+	if !state.HasLastMove {
+		return 0
+	}
+	bonusBase := resolvedHeuristicConfig(config).LastMoveNeighbor
+	if bonusBase == 0 {
+		return 0
+	}
+	dx := absInt(move.X - state.LastMove.X)
+	dy := absInt(move.Y - state.LastMove.Y)
+	distance := dx + dy
+	switch distance {
+	case 0:
+		return bonusBase
+	case 1:
+		return bonusBase * 0.75
+	case 2:
+		return bonusBase * 0.45
+	case 3:
+		return bonusBase * 0.2
+	default:
+		return 0
+	}
 }
 
 func evaluateStateHeuristic(state GameState, rules Rules, settings AIScoreSettings) float64 {
@@ -5667,6 +5714,7 @@ func applyMove(state *GameState, rules Rules, move Move, player PlayerColor) boo
 		} else {
 			state.Status = StatusRedWon
 		}
+	} else if marksForcedImmediateCaptureLoss(state, rules, player) {
 	} else if rules.IsDraw(state.Board) {
 		state.Status = StatusDraw
 	} else {
@@ -5746,6 +5794,7 @@ func applyMoveWithUndo(state *GameState, rules Rules, move Move, player PlayerCo
 		} else {
 			state.Status = StatusRedWon
 		}
+	} else if marksForcedImmediateCaptureLoss(state, rules, player) {
 	} else if rules.IsDraw(state.Board) {
 		state.Status = StatusDraw
 	} else {
@@ -5769,6 +5818,23 @@ func applyMoveWithUndo(state *GameState, rules Rules, move Move, player PlayerCo
 			undo.evalUndo = evalUndo
 			undo.hasEvalUndo = true
 		}
+	}
+	return true
+}
+
+func marksForcedImmediateCaptureLoss(state *GameState, rules Rules, player PlayerColor) bool {
+	opponent := otherPlayer(player)
+	opponentCaptured := state.CapturedBlue
+	if opponent == PlayerRed {
+		opponentCaptured = state.CapturedRed
+	}
+	if _, _, ok := rules.FindImmediateCaptureWinMove(*state, opponent, opponentCaptured); !ok {
+		return false
+	}
+	if opponent == PlayerBlue {
+		state.Status = StatusBlueWon
+	} else {
+		state.Status = StatusRedWon
 	}
 	return true
 }
@@ -5907,6 +5973,32 @@ func wouldCapture(board Board, move Move, playerCell, opponentCell Cell) bool {
 
 func captureStoneCountForMove(board Board, rules Rules, move Move, player PlayerColor) int {
 	return len(rules.FindCaptures(board, move, CellFromPlayer(player)))
+}
+
+// captureTargetsThreatAlignmentStone returns true if playing 'move' would
+// capture a stone that is part of any TierMustAnswer-or-stronger opponent
+// threat's alignment (Stones). Such a capture disrupts the alignment and forces
+// the opponent to spend at least one extra move to rebuild it.
+func captureTargetsThreatAlignmentStone(board Board, rules Rules, move Move, player PlayerColor, oppThreats []Threat, boardSize int) bool {
+	captured := rules.FindCaptures(board, move, CellFromPlayer(player))
+	if len(captured) == 0 {
+		return false
+	}
+	capturedSet := make(map[int]struct{}, len(captured))
+	for _, c := range captured {
+		capturedSet[c.Y*boardSize+c.X] = struct{}{}
+	}
+	for _, threat := range oppThreats {
+		if threat.Tier < TierMustAnswer {
+			continue
+		}
+		for _, stone := range threat.Stones {
+			if _, ok := capturedSet[stone.Y*boardSize+stone.X]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isDefensiveCapture returns true if playing 'move' would capture at least one
@@ -7233,7 +7325,7 @@ func searchRootPoolAtDepth(state GameState, settings AIScoreSettings, ctx minima
 		}
 		logSearchMove(ctx, depth, 0, move, moveIndex, totalMoves, searchDepth, localAlpha, localBeta, bandName)
 		var moveStatus string
-		score := evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, searchDepth, boardHash, lineOut, &cached, &moveStatus, localAlpha, localBeta)
+		score := evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, 0, boardHash, lineOut, &cached, &moveStatus, localAlpha, localBeta)
 		if settings.Config.AiEnableAspiration && !verification && useBounds && (score <= aspirationAlpha || score >= aspirationBeta) {
 			if timedOut(ctx) {
 				return 0, false
@@ -7242,15 +7334,15 @@ func searchRootPoolAtDepth(state GameState, settings AIScoreSettings, ctx minima
 			// This is cheaper than a full-window re-search when the score is just outside
 			// one side of the window (the other bound still prunes).
 			if score <= aspirationAlpha {
-				score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, searchDepth, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), aspirationBeta)
+				score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, 0, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), aspirationBeta)
 				// If the score jumped all the way past the other side, fall back to full window.
 				if !timedOut(ctx) && score >= aspirationBeta {
-					score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, searchDepth, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), math.Inf(1))
+					score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, 0, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), math.Inf(1))
 				}
 			} else {
-				score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, searchDepth, boardHash, lineOut, &cached, &moveStatus, aspirationAlpha, math.Inf(1))
+				score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, 0, boardHash, lineOut, &cached, &moveStatus, aspirationAlpha, math.Inf(1))
 				if !timedOut(ctx) && score <= aspirationAlpha {
-					score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, searchDepth, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), math.Inf(1))
+					score = evaluateMoveWithCache(&state, ctx, settings.Player, move, searchDepth, 0, boardHash, lineOut, &cached, &moveStatus, math.Inf(-1), math.Inf(1))
 				}
 			}
 		}
@@ -7957,7 +8049,7 @@ func searchRootPoolAtDepthParallel(state GameState, rules Rules, settings AIScor
 		if outBestLine != nil {
 			lineOut = &line
 		}
-		score := evaluateMoveWithCache(localState, wctx, settings.Player, move, depth, depth, boardHash, lineOut, &cached, &moveStatus, localAlpha, localBeta)
+		score := evaluateMoveWithCache(localState, wctx, settings.Player, move, depth, 0, boardHash, lineOut, &cached, &moveStatus, localAlpha, localBeta)
 		return score, true, cached, moveStatus, cloneSearchDebugLine(line)
 	}
 
@@ -8182,7 +8274,7 @@ func scoreBoardDirectDepthRootSplitParallel(state GameState, rules Rules, settin
 		move := rootPool[idx].Move
 		cached := false
 		moveStatus := ""
-		score := evaluateMoveWithCache(localState, wctx, settings.Player, move, settings.Depth, settings.Depth, boardHash, nil, &cached, &moveStatus, localAlpha, localBeta)
+		score := evaluateMoveWithCache(localState, wctx, settings.Player, move, settings.Depth, 0, boardHash, nil, &cached, &moveStatus, localAlpha, localBeta)
 		return score, cached, moveStatus
 	}
 

@@ -56,6 +56,9 @@ func resolvedHeuristicConfig(config Config) HeuristicConfig {
 	if heuristics.HangingPair == 0 {
 		heuristics.HangingPair = defaults.HangingPair
 	}
+	if heuristics.LastMoveNeighbor == 0 {
+		heuristics.LastMoveNeighbor = defaults.LastMoveNeighbor
+	}
 	if heuristics.CaptureWinSoonScale == 0 {
 		heuristics.CaptureWinSoonScale = defaults.CaptureWinSoonScale
 	}
@@ -92,6 +95,7 @@ func heuristicHash(config HeuristicConfig) uint64 {
 	mix(config.CaptureNearWin)
 	mix(config.CaptureInTwo)
 	mix(config.HangingPair)
+	mix(config.LastMoveNeighbor)
 	mix(config.CaptureWinSoonScale)
 	mix(float64(config.CaptureInTwoLimit))
 	return hash
