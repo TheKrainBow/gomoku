@@ -110,6 +110,7 @@ button.danger {
   display: inline-flex;
   flex-direction: column;
   gap: var(--cell-gap, 2px);
+  perspective: 760px;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -402,6 +403,7 @@ button.danger {
 }
 
 .board-cell {
+  position: relative;
   width: var(--cell-size, 22px);
   height: var(--cell-size, 22px);
   border-radius: 5px;
@@ -412,7 +414,9 @@ button.danger {
   font-size: calc(var(--cell-size, 22px) * 0.55);
   color: #f4f6fb;
   background: rgba(255, 255, 255, 0.04);
+  transform-style: preserve-3d;
   transition: background 0.2s ease;
+  will-change: transform;
 }
 
 .board-cell.player-1 {
@@ -431,6 +435,101 @@ button.danger {
 
 .board-cell.playable:hover {
   background: rgba(255, 255, 255, 0.18);
+}
+
+.board-cell.forbidden-move {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #f4f6fb;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.board-cell.forbidden-move::before,
+.board-cell.forbidden-move::after {
+  content: "";
+  position: absolute;
+  width: 58%;
+  height: max(2px, calc(var(--cell-size, 22px) * 0.09));
+  border-radius: 999px;
+  background: #ffd84d;
+  box-shadow: 0 0 5px rgba(255, 216, 77, 0.28);
+  pointer-events: none;
+}
+
+.board-cell.forbidden-move::before {
+  transform: rotate(45deg);
+}
+
+.board-cell.forbidden-move::after {
+  transform: rotate(-45deg);
+}
+
+.board-cell.must-play-move {
+  border-color: #ffd84d;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 216, 77, 0.9),
+    0 0 8px rgba(255, 216, 77, 0.28);
+}
+
+.board-cell.must-play-move.playable:hover {
+  background: rgba(255, 216, 77, 0.14);
+}
+
+.board-cell-content {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.board-cell.cell-flipping {
+  animation: cellCardFlip 0.52s cubic-bezier(0.22, 0.72, 0.18, 1);
+}
+
+.board-cell.cell-flipping .board-cell-content {
+  animation: cellCardContentReveal 0.52s ease;
+}
+
+.board-cell.cell-flipping.forbidden-move::before,
+.board-cell.cell-flipping.forbidden-move::after {
+  animation: cellCardContentReveal 0.52s ease;
+}
+
+@keyframes cellCardFlip {
+  0% {
+    background: var(--flip-from-bg);
+    border-color: var(--flip-from-border);
+    box-shadow: var(--flip-from-shadow);
+    transform: rotateY(0deg) scale(1);
+  }
+  48% {
+    background: var(--flip-from-bg);
+    border-color: var(--flip-from-border);
+    box-shadow: var(--flip-from-shadow);
+    transform: rotateY(88deg) scale(0.98);
+  }
+  52% {
+    background: var(--flip-to-bg);
+    border-color: var(--flip-to-border);
+    box-shadow: var(--flip-to-shadow);
+    transform: rotateY(88deg) scale(0.98);
+  }
+  100% {
+    background: var(--flip-to-bg);
+    border-color: var(--flip-to-border);
+    box-shadow: var(--flip-to-shadow);
+    transform: rotateY(0deg) scale(1);
+  }
+}
+
+@keyframes cellCardContentReveal {
+  0%,
+  58% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 .board-cell.ghost-suggestion {
@@ -748,6 +847,17 @@ button.danger {
   border-color: #9da5b4;
 }
 
+.rules-button {
+  padding: 7px 12px;
+  border-color: rgba(79, 154, 255, 0.5);
+  background: rgba(79, 154, 255, 0.16);
+  font-weight: 700;
+}
+
+.rules-button:hover:not(:disabled) {
+  background: rgba(79, 154, 255, 0.26);
+}
+
 .snapshot-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -802,6 +912,145 @@ button.danger {
 .snapshot-modal-actions {
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+.rules-modal {
+  width: min(700px, 100%);
+  height: min(500px, calc(100dvh - 48px));
+  overflow: hidden;
+}
+
+.rules-page-count {
+  color: #9da5b4;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.rules-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.rules-page h3 {
+  margin: 0;
+  font-size: 20px;
+  color: #f4f6fb;
+}
+
+.rules-page p {
+  margin: 0;
+  color: #d7dfe9;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.rules-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.rules-board-card {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 10px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rules-board-card figcaption {
+  min-height: 28px;
+  color: #9da5b4;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.rules-capture-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 152px));
+  gap: 12px;
+  justify-content: center;
+}
+
+.rules-capture-status-grid .capture-card {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.rules-mini-board {
+  padding: 4px;
+  border-radius: 6px;
+  background: rgba(6, 10, 17, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rules-mini-board .mini-7-cell {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rules-mini-board .rule-cell-highlight {
+  outline: 2px solid rgba(255, 216, 77, 0.9);
+  outline-offset: -2px;
+  box-shadow:
+    0 0 0 1px rgba(255, 216, 77, 0.65),
+    0 0 12px rgba(255, 216, 77, 0.35);
+}
+
+.rules-mini-board .rule-forbidden-move {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+
+.rules-mini-board .rule-forbidden-move::before,
+.rules-mini-board .rule-forbidden-move::after {
+  content: "";
+  position: absolute;
+  left: 15%;
+  top: calc(50% - 1.5px);
+  width: 70%;
+  height: 3px;
+  border-radius: 999px;
+  background: #ffd84d;
+  box-shadow: 0 0 5px rgba(255, 216, 77, 0.28);
+  pointer-events: none;
+}
+
+.rules-mini-board .rule-forbidden-move::before {
+  transform: rotate(45deg);
+}
+
+.rules-mini-board .rule-forbidden-move::after {
+  transform: rotate(-45deg);
+}
+
+.rules-note {
+  color: #9da5b4 !important;
+}
+
+.rules-modal-actions {
+  flex: 0 0 auto;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 

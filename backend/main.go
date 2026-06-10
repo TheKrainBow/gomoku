@@ -34,6 +34,8 @@ type StatusResponse struct {
 	WinningCapturePair []Move            `json:"winning_capture_pair"`
 	CaptureWinStones   int               `json:"capture_win_stones"`
 	TurnStartedAtMs    int64             `json:"turn_started_at_ms"`
+	ForbiddenMoves     []Move            `json:"forbidden_moves"`
+	MustPlayMoves      []Move            `json:"must_play_moves"`
 }
 
 type GameSettingsDTO struct {
@@ -96,6 +98,8 @@ type resetPayload struct {
 	WinningCapturePair []Move            `json:"winning_capture_pair"`
 	CaptureWinStones   int               `json:"capture_win_stones"`
 	TurnStartedAtMs    int64             `json:"turn_started_at_ms"`
+	ForbiddenMoves     []Move            `json:"forbidden_moves"`
+	MustPlayMoves      []Move            `json:"must_play_moves"`
 }
 
 type cellChange struct {
@@ -480,7 +484,46 @@ func controllerStatus(controller *GameController) StatusResponse {
 		WinningCapturePair: append([]Move(nil), state.WinningCapturePair...),
 		CaptureWinStones:   gameSettings.CaptureWinStones,
 		TurnStartedAtMs:    controller.CurrentTurnStartedAtMs(),
+		ForbiddenMoves:     forbiddenMovesForState(state, gameSettings),
+		MustPlayMoves:      mustPlayMovesForState(state),
 	}
+}
+
+func forbiddenMovesForState(state GameState, settings GameSettings) []Move {
+	if state.Status != StatusRunning {
+		return nil
+	}
+	forbid := false
+	if state.ToMove == PlayerBlue {
+		forbid = settings.ForbidDoubleThreeBlue
+	} else {
+		forbid = settings.ForbidDoubleThreeRed
+	}
+	if !forbid || state.MustCapture {
+		return nil
+	}
+	rules := NewRules(settings)
+	size := state.Board.Size()
+	moves := make([]Move, 0, 8)
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			if !state.Board.IsEmpty(x, y) {
+				continue
+			}
+			move := Move{X: x, Y: y}
+			if rules.IsForbiddenDoubleThree(state.Board, move, state.ToMove) {
+				moves = append(moves, move)
+			}
+		}
+	}
+	return moves
+}
+
+func mustPlayMovesForState(state GameState) []Move {
+	if state.Status != StatusRunning || !state.MustCapture {
+		return nil
+	}
+	return append([]Move(nil), state.ForcedCaptureMoves...)
 }
 
 func winReasonFromState(state GameState) string {
@@ -773,6 +816,8 @@ func resetFromController(controller *GameController) resetPayload {
 		WinningCapturePair: append([]Move(nil), state.WinningCapturePair...),
 		CaptureWinStones:   settings.CaptureWinStones,
 		TurnStartedAtMs:    controller.CurrentTurnStartedAtMs(),
+		ForbiddenMoves:     forbiddenMovesForState(state, settings),
+		MustPlayMoves:      mustPlayMovesForState(state),
 	}
 }
 

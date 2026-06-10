@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+
+const CELL_VISUAL_EMPTY = 0
+const CELL_VISUAL_BLUE = 1
+const CELL_VISUAL_RED = 2
+const CELL_VISUAL_FORBIDDEN = 3
+const CELL_VISUAL_MUST_PLAY = 4
 
 const defaultStatus = {
   settings: { mode: 'ai_vs_human', human_player: 1 },
@@ -30,7 +36,9 @@ const defaultStatus = {
   winning_line: [],
   winning_capture_pair: [],
   capture_win_stones: 10,
-  turn_started_at_ms: 0
+  turn_started_at_ms: 0,
+  forbidden_moves: [],
+  must_play_moves: []
 }
 
 function wsUrl(path) {
@@ -69,6 +77,131 @@ function appendFreshHistory(prevHistory, nextHistory) {
   return [...prevHistory, ...incoming]
 }
 
+const emptyRuleBoard = () => Array.from({ length: 7 }, () => Array(7).fill(0))
+
+function makeRuleBoard(cells) {
+  const board = emptyRuleBoard()
+  for (const cell of cells) {
+    board[cell.y][cell.x] = cell.value
+  }
+  return board
+}
+
+const rulePages = [
+  {
+    title: 'Five aligned stones',
+    body:
+      'Make a line of five or more of your stones to win. Lines count horizontally, vertically, and on both diagonal directions.',
+    boards: [
+      {
+        label: 'Diagonal five',
+        board: makeRuleBoard([
+          { x: 1, y: 5, value: 1 },
+          { x: 2, y: 4, value: 1 },
+          { x: 3, y: 3, value: 1 },
+          { x: 4, y: 2, value: 1 },
+          { x: 5, y: 1, value: 1 }
+        ])
+      }
+    ]
+  },
+  {
+    title: 'Captures',
+    body:
+      'A capture happens only when your new stone traps exactly two opponent stones between two of your stones. The two trapped stones are removed. Captures work in every direction, including diagonals.',
+    boards: [
+      {
+        label: 'No capture: one stone between',
+        board: makeRuleBoard([
+          { x: 2, y: 3, value: 1 },
+          { x: 3, y: 3, value: 2 },
+          { x: 4, y: 3, value: 1 }
+        ])
+      },
+      {
+        label: 'Capture: exactly two between',
+        board: makeRuleBoard([
+          { x: 1, y: 3, value: 1 },
+          { x: 2, y: 3, value: 5 },
+          { x: 3, y: 3, value: 5 },
+          { x: 4, y: 3, value: 1 }
+        ])
+      },
+      {
+        label: 'No capture: three stones between',
+        board: makeRuleBoard([
+          { x: 1, y: 3, value: 1 },
+          { x: 2, y: 3, value: 2 },
+          { x: 3, y: 3, value: 2 },
+          { x: 4, y: 3, value: 2 },
+          { x: 5, y: 3, value: 1 }
+        ])
+      }
+    ]
+  },
+  {
+    title: 'Five captured pairs',
+    body:
+      'Each capture removes one pair of stones. Capturing five pairs, for a total of ten stones, wins the game.',
+    captureCards: [
+      {
+        player: 1,
+        name: 'Blue',
+        accent: 'blue',
+        capturedPairs: 5,
+        isWinner: true
+      },
+      {
+        player: 2,
+        name: 'Red',
+        accent: 'red',
+        capturedPairs: 0,
+        isWinner: false
+      }
+    ],
+    note: 'Blue has five captured pairs, so Blue wins immediately.'
+  },
+  {
+    title: 'Double three',
+    body:
+      'Blue plays first, so Blue may not place a stone that creates two separate open-three threats at the same time. This prevents the first player from making a fork that is too strong to answer.',
+    boards: [
+      {
+        label: 'Forbidden double-three spot',
+        board: makeRuleBoard([
+          { x: 1, y: 1, value: 2 },
+          { x: 2, y: 2, value: 2 },
+          { x: 3, y: 3, value: 7 },
+          { x: 4, y: 3, value: 2 },
+          { x: 5, y: 3, value: 2 }
+        ])
+      }
+    ],
+    note: 'The yellow cross marks the forbidden move: playing there would create one diagonal open-three and one horizontal open-three.'
+  },
+  {
+    title: 'Breakable five',
+    body:
+      'If a five-stone alignment includes stones the opponent can immediately capture, the opponent is forced to play that capture. The alignment wins only when it cannot be broken by capture.',
+    boards: [
+      {
+        label: 'Forced Red capture breaks the line',
+        board: makeRuleBoard([
+          { x: 1, y: 3, value: 1 },
+          { x: 2, y: 3, value: 1 },
+          { x: 3, y: 3, value: 6 },
+          { x: 4, y: 3, value: 1 },
+          { x: 5, y: 3, value: 1 },
+          { x: 3, y: 4, value: 6 },
+          { x: 3, y: 5, value: 2 },
+          { x: 3, y: 2, value: 4 }
+        ])
+      }
+    ],
+    note: 'Red must play the highlighted square, capturing the two marked Blue stones and breaking the five.'
+  }
+]
+
 export default function App() {
   const [ping, setPing] = useState('pending')
   const [status, setStatus] = useState(defaultStatus)
@@ -84,6 +217,8 @@ export default function App() {
   const [snapshotText, setSnapshotText] = useState('')
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const [snapshotCopyState, setSnapshotCopyState] = useState('')
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [rulesPage, setRulesPage] = useState(0)
   const [applyBoardOpen, setApplyBoardOpen] = useState(false)
   const [applyBoardText, setApplyBoardText] = useState('')
   const [applyBoardNextPlayer, setApplyBoardNextPlayer] = useState(1)
@@ -112,10 +247,14 @@ export default function App() {
   const boardPanelRef = useRef(null)
   const historyListRef = useRef(null)
   const prevHistoryLenRef = useRef(0)
+  const prevBoardForAnimationRef = useRef(null)
+  const prevSpecialCellsForAnimationRef = useRef(null)
+  const cellAnimationTimersRef = useRef(new Map())
   const analiticsRefreshBusyRef = useRef(false)
   const autoSaveTimerRef = useRef(null)
   const saveInFlightRef = useRef(false)
   const queuedSettingsPayloadRef = useRef(null)
+  const [cellAnimations, setCellAnimations] = useState({})
 
   const refreshAnaliticsQueue = async () => {
     if (analiticsRefreshBusyRef.current) {
@@ -184,6 +323,10 @@ export default function App() {
       clearTimeout(autoSaveTimerRef.current)
       autoSaveTimerRef.current = null
     }
+    for (const timer of cellAnimationTimersRef.current.values()) {
+      clearTimeout(timer)
+    }
+    cellAnimationTimersRef.current.clear()
   }, [])
 
   useEffect(() => {
@@ -255,7 +398,9 @@ export default function App() {
           winning_line: msg.payload.winning_line || [],
           winning_capture_pair: msg.payload.winning_capture_pair || [],
           capture_win_stones: msg.payload.capture_win_stones || prev.capture_win_stones || 10,
-          turn_started_at_ms: msg.payload.turn_started_at_ms || prev.turn_started_at_ms || 0
+          turn_started_at_ms: msg.payload.turn_started_at_ms || prev.turn_started_at_ms || 0,
+          forbidden_moves: msg.payload.forbidden_moves || [],
+          must_play_moves: msg.payload.must_play_moves || []
         }))
       }
       if (msg.type === 'settings') {
@@ -404,6 +549,74 @@ export default function App() {
     [history, status.board_size, effectiveHistoryIndex]
   )
 
+  useLayoutEffect(() => {
+    const board = displayedSnapshot.board
+    if (!board || board.length === 0) {
+      prevBoardForAnimationRef.current = null
+      prevSpecialCellsForAnimationRef.current = null
+      setCellAnimations({})
+      return
+    }
+
+    const nextBoard = board.map((row) => row.slice())
+    const previousBoard = prevBoardForAnimationRef.current
+    prevBoardForAnimationRef.current = nextBoard
+
+    if (!previousBoard || effectiveHistoryIndex !== latestHistoryIndex) {
+      if (effectiveHistoryIndex !== latestHistoryIndex) {
+        prevSpecialCellsForAnimationRef.current = null
+      }
+      setCellAnimations({})
+      return
+    }
+
+    const changedCells = {}
+    for (let y = 0; y < nextBoard.length; y++) {
+      const row = nextBoard[y]
+      for (let x = 0; x < row.length; x++) {
+        const previousValue = previousBoard[y]?.[x] ?? 0
+        const nextValue = row[x]
+        if (previousValue !== nextValue) {
+          const key = `${x},${y}`
+          changedCells[key] = {
+            id: `${Date.now()}-${key}-${previousValue}-${nextValue}`,
+            from: previousValue,
+            to: nextValue
+          }
+        }
+      }
+    }
+
+    const changedKeys = Object.keys(changedCells)
+    if (changedKeys.length === 0) {
+      return
+    }
+
+    setCellAnimations((prev) => ({
+      ...prev,
+      ...changedCells
+    }))
+
+    for (const key of changedKeys) {
+      const existingTimer = cellAnimationTimersRef.current.get(key)
+      if (existingTimer) {
+        clearTimeout(existingTimer)
+      }
+      const timer = setTimeout(() => {
+        cellAnimationTimersRef.current.delete(key)
+        setCellAnimations((prev) => {
+          if (!prev[key]) {
+            return prev
+          }
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }, 560)
+      cellAnimationTimersRef.current.set(key, timer)
+    }
+  }, [displayedSnapshot.board, effectiveHistoryIndex, latestHistoryIndex])
+
   useEffect(() => {
     if (selectedHistoryIndex >= history.length) {
       setSelectedHistoryIndex(-1)
@@ -494,6 +707,82 @@ export default function App() {
     status.next_player,
     history.length
   ])
+  const forbiddenMoveSet = useMemo(() => {
+    const set = new Set()
+    if (effectiveHistoryIndex !== latestHistoryIndex) {
+      return set
+    }
+    for (const move of status.forbidden_moves || []) {
+      set.add(`${move.x},${move.y}`)
+    }
+    return set
+  }, [status.forbidden_moves, effectiveHistoryIndex, latestHistoryIndex])
+  const mustPlayMoveSet = useMemo(() => {
+    const set = new Set()
+    if (effectiveHistoryIndex !== latestHistoryIndex) {
+      return set
+    }
+    for (const move of status.must_play_moves || []) {
+      set.add(`${move.x},${move.y}`)
+    }
+    return set
+  }, [status.must_play_moves, effectiveHistoryIndex, latestHistoryIndex])
+
+  useLayoutEffect(() => {
+    const board = displayedSnapshot.board
+    if (!board || board.length === 0 || effectiveHistoryIndex !== latestHistoryIndex) {
+      prevSpecialCellsForAnimationRef.current = null
+      return
+    }
+
+    const nextSpecials = buildSpecialVisualCells(board, forbiddenMoveSet, mustPlayMoveSet)
+    const previousSpecials = prevSpecialCellsForAnimationRef.current || new Map()
+    prevSpecialCellsForAnimationRef.current = nextSpecials
+
+    const changedCells = {}
+    for (const key of new Set([...previousSpecials.keys(), ...nextSpecials.keys()])) {
+      const previousValue = previousSpecials.get(key) || CELL_VISUAL_EMPTY
+      const nextValue = nextSpecials.get(key) || CELL_VISUAL_EMPTY
+      if (previousValue === nextValue || nextValue === CELL_VISUAL_EMPTY) {
+        continue
+      }
+      changedCells[key] = {
+        id: `${Date.now()}-${key}-${previousValue}-${nextValue}`,
+        from: previousValue,
+        to: nextValue
+      }
+    }
+
+    const changedKeys = Object.keys(changedCells)
+    if (changedKeys.length === 0) {
+      return
+    }
+
+    setCellAnimations((prev) => ({
+      ...prev,
+      ...changedCells
+    }))
+
+    for (const key of changedKeys) {
+      const existingTimer = cellAnimationTimersRef.current.get(key)
+      if (existingTimer) {
+        clearTimeout(existingTimer)
+      }
+      const timer = setTimeout(() => {
+        cellAnimationTimersRef.current.delete(key)
+        setCellAnimations((prev) => {
+          if (!prev[key]) {
+            return prev
+          }
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }, 560)
+      cellAnimationTimersRef.current.set(key, timer)
+    }
+  }, [displayedSnapshot.board, forbiddenMoveSet, mustPlayMoveSet, effectiveHistoryIndex, latestHistoryIndex])
+
   const boardRows = useMemo(() => {
     if (!displayedSnapshot.board || displayedSnapshot.board.length === 0) {
       return null
@@ -508,6 +797,8 @@ export default function App() {
           (() => {
             const isWinningLineCell = winningLineSet.has(`${colIndex},${rowIndex}`)
             const isWinningCaptureCell = captureWinPairSet.has(`${colIndex},${rowIndex}`)
+            const isForbiddenMoveCell = forbiddenMoveSet.has(`${colIndex},${rowIndex}`)
+            const isMustPlayMoveCell = mustPlayMoveSet.has(`${colIndex},${rowIndex}`)
             const isFinalCaptureWin =
               status.win_reason === 'capture' &&
               status.winner > 0 &&
@@ -524,6 +815,18 @@ export default function App() {
               lastHistoryEntry.y === rowIndex &&
               renderedCell !== 0
             const moveNumber = displayedSnapshot.moveNumbers[rowIndex][colIndex]
+            const animationKey = `${colIndex},${rowIndex}`
+            const cellAnimation = cellAnimations[animationKey]
+            const cellAnimationStyle = cellAnimation
+              ? {
+                  '--flip-from-bg': getCellBackground(cellAnimation.from),
+                  '--flip-to-bg': getCellBackground(cellAnimation.to),
+                  '--flip-from-shadow': getCellShadow(cellAnimation.from),
+                  '--flip-to-shadow': getCellShadow(cellAnimation.to),
+                  '--flip-from-border': getCellBorderColor(cellAnimation.from),
+                  '--flip-to-border': getCellBorderColor(cellAnimation.to)
+                }
+              : undefined
             const isSuggestionCell =
               showSuggestion &&
               renderedCell === 0 &&
@@ -532,7 +835,13 @@ export default function App() {
             return (
           <div
             className={`board-cell player-${renderedCell} ${
-              renderedCell === 0 && status.winner === 0 && isHumanTurn ? 'playable' : ''
+              cellAnimation ? 'cell-flipping' : ''
+            } ${
+              renderedCell === 0 && status.winner === 0 && isHumanTurn && !isForbiddenMoveCell ? 'playable' : ''
+            } ${
+              isForbiddenMoveCell && renderedCell === 0 ? 'forbidden-move' : ''
+            } ${
+              isMustPlayMoveCell && renderedCell === 0 ? 'must-play-move' : ''
             } ${isWinningLineCell && cell !== 0 ? `winning-line reverse-player-${cell}` : ''} ${
               isWinningCaptureCell && renderedCell !== 0
                 ? restoredCapturedStone
@@ -544,12 +853,15 @@ export default function App() {
             } ${isSuggestionCell ? `ghost-suggestion ghost-player-${activeMoveSuggestion.player}` : ''} ${
               isSuggestionCell ? 'ghost-suggestion-animated' : ''
             }`}
-            key={`cell-${rowIndex}-${colIndex}`}
+            key={`cell-${rowIndex}-${colIndex}-${cellAnimation?.id || 'still'}`}
             role="button"
             tabIndex={0}
+            style={cellAnimationStyle}
             onClick={() => handleCellClick(colIndex, rowIndex)}
           >
-            {isSuggestionCell ? '' : renderedCell === 0 || moveNumber <= 0 ? '' : moveNumber}
+            <span className="board-cell-content">
+              {isSuggestionCell ? '' : renderedCell === 0 || moveNumber <= 0 ? '' : moveNumber}
+            </span>
           </div>
             )
           })()
@@ -565,10 +877,13 @@ export default function App() {
     humanPlayer,
     winningLineSet,
     captureWinPairSet,
+    forbiddenMoveSet,
+    mustPlayMoveSet,
     effectiveHistoryIndex,
     latestHistoryIndex,
     lastHistoryEntry,
     activeMoveSuggestion,
+    cellAnimations,
     history.length,
     status.config.ghost_mode
   ])
@@ -581,6 +896,7 @@ export default function App() {
       (status.settings.mode === 'ai_vs_human' && status.next_player === humanPlayer))
   const nextPlayerLabel = status.next_player === 1 ? 'Blue' : 'Red'
   const winnerLabel = status.winner === 1 ? 'Blue' : status.winner === 2 ? 'Red' : ''
+  const activeRulePage = rulePages[rulesPage]
 
   const formatDuration = (msValue) => {
     if (msValue == null) return ''
@@ -891,6 +1207,9 @@ export default function App() {
     if (liveSnapshot.board[y][x] !== 0) {
       return
     }
+    if ((status.forbidden_moves || []).some((move) => move.x === x && move.y === y)) {
+      return
+    }
     setMoveBusy(true)
     try {
       const res = await fetch('/api/move', {
@@ -915,6 +1234,16 @@ export default function App() {
           <p>Play on the built-in board.</p>
         </div>
         <div className="header-links">
+          <button
+            type="button"
+            className="rules-button"
+            onClick={() => {
+              setRulesPage(0)
+              setRulesOpen(true)
+            }}
+          >
+            Rules
+          </button>
           <a className="cache-link" href="/cache">
             TT cache
           </a>
@@ -1202,6 +1531,62 @@ export default function App() {
           </div>
         </div>
       )}
+      {rulesOpen && (
+        <div className="snapshot-modal-backdrop" onClick={() => setRulesOpen(false)} role="presentation">
+          <div
+            className="snapshot-modal rules-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rules-title"
+          >
+            <div className="snapshot-modal-header">
+              <h2 id="rules-title">Rules</h2>
+              <button type="button" onClick={() => setRulesOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="rules-page-count">
+              Rule {rulesPage + 1} / {rulePages.length}
+            </div>
+            <section className="rules-page">
+              <h3>{activeRulePage.title}</h3>
+              <p>{activeRulePage.body}</p>
+              {activeRulePage.captureCards ? (
+                renderRuleCaptureCards(activeRulePage.captureCards)
+              ) : (
+                <div className="rules-board-grid">
+                  {activeRulePage.boards.map((example) => (
+                    <figure className="rules-board-card" key={example.label}>
+                      {renderRuleBoard(example.board)}
+                      <figcaption>{example.label}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              )}
+              {activeRulePage.note ? <p className="rules-note">{activeRulePage.note}</p> : null}
+            </section>
+            <div className="rules-modal-actions">
+              <button
+                type="button"
+                onClick={() => setRulesPage((prev) => Math.max(0, prev - 1))}
+                disabled={rulesPage === 0}
+              >
+                Prev
+              </button>
+              {rulesPage === rulePages.length - 1 ? (
+                <button type="button" onClick={() => setRulesOpen(false)}>
+                  Close
+                </button>
+              ) : (
+                <button type="button" onClick={() => setRulesPage((prev) => Math.min(rulePages.length - 1, prev + 1))}>
+                  Next
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {applyBoardOpen && (
         <div className="snapshot-modal-backdrop" onClick={() => setApplyBoardOpen(false)} role="presentation">
           <div className="snapshot-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
@@ -1280,6 +1665,109 @@ function buildBoardSnapshot(history, size, upToIndex) {
     }
   }
   return { board, moveNumbers }
+}
+
+function getCellBackground(cell) {
+  if (cell === CELL_VISUAL_BLUE) {
+    return '#4f9aff'
+  }
+  if (cell === CELL_VISUAL_RED) {
+    return '#ff4c4c'
+  }
+  return 'rgba(255, 255, 255, 0.04)'
+}
+
+function getCellShadow(cell) {
+  if (cell === CELL_VISUAL_BLUE) {
+    return 'inset 0 0 8px rgba(79, 154, 255, 0.8)'
+  }
+  if (cell === CELL_VISUAL_RED) {
+    return 'inset 0 0 8px rgba(255, 76, 76, 0.8)'
+  }
+  if (cell === CELL_VISUAL_MUST_PLAY) {
+    return 'inset 0 0 0 1px rgba(255, 216, 77, 0.9), 0 0 8px rgba(255, 216, 77, 0.28)'
+  }
+  return 'none'
+}
+
+function getCellBorderColor(cell) {
+  if (cell === CELL_VISUAL_MUST_PLAY) {
+    return '#ffd84d'
+  }
+  return 'rgba(255, 255, 255, 0.1)'
+}
+
+function buildSpecialVisualCells(board, forbiddenMoveSet, mustPlayMoveSet) {
+  const cells = new Map()
+  for (let y = 0; y < board.length; y++) {
+    const row = board[y] || []
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] !== CELL_VISUAL_EMPTY) {
+        continue
+      }
+      const key = `${x},${y}`
+      if (forbiddenMoveSet.has(key)) {
+        cells.set(key, CELL_VISUAL_FORBIDDEN)
+      } else if (mustPlayMoveSet.has(key)) {
+        cells.set(key, CELL_VISUAL_MUST_PLAY)
+      }
+    }
+  }
+  return cells
+}
+
+function renderRuleBoard(board) {
+  return (
+    <div className="mini-7-board rules-mini-board">
+      {board.map((row, y) => (
+        <div className="mini-7-row" key={`rule-r-${y}`}>
+          {row.map((cell, x) => {
+            const isBlue = cell === 1 || cell === 3 || cell === 6
+            const isRed = cell === 2 || cell === 4 || cell === 5
+            const playerClass = isBlue ? 'p1' : isRed ? 'p2' : ''
+            const highlightClass = cell === 3 || cell === 4 ? 'rule-cell-highlight' : ''
+            const capturedClass = cell === 5 || cell === 6 ? 'captured-fade' : ''
+            const forbiddenClass = cell === 7 ? 'rule-forbidden-move' : ''
+            const label = cell === 4 ? '!' : ''
+            return (
+              <span
+                className={`mini-7-cell ${playerClass} ${highlightClass} ${capturedClass} ${forbiddenClass}`}
+                key={`rule-${x}-${y}`}
+              >
+                {label}
+              </span>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderRuleCaptureCards(cards) {
+  return (
+    <div className="rules-capture-status-grid">
+      {cards.map((card) => (
+        <article
+          className={`capture-card capture-card-${card.accent} ${card.isWinner ? 'is-winner' : ''}`}
+          key={card.player}
+        >
+          <div className="capture-card-header">
+            <div className="capture-card-name">
+              {card.name}
+              {card.isWinner ? <span className="capture-card-crown" aria-hidden="true">♛</span> : null}
+            </div>
+          </div>
+          <div className="capture-card-stone" aria-hidden="true" />
+          <div className="capture-card-bulbs" aria-label={`${card.name} capture progress`}>
+            {Array.from({ length: 5 }, (_, index) => (
+              <span className={`capture-bulb ${index < card.capturedPairs ? 'lit' : ''}`} key={`${card.player}-${index}`} />
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  )
 }
 
 function renderMiniBoard(board) {
