@@ -93,17 +93,17 @@ type SearchDebugLine struct {
 }
 
 type minimaxContext struct {
-	rules          Rules
-	settings       AIScoreSettings
-	evalState      *EvalState
-	start          time.Time
-	killers        [][]Move
-	history        []int
-	footprint      *searchFootprint
-	mustBlockLog   *mustBlockLogger
-	deadline       time.Time
-	hasDeadline    bool
-	logIndent      int
+	rules        Rules
+	settings     AIScoreSettings
+	evalState    *EvalState
+	start        time.Time
+	killers      [][]Move
+	history      []int
+	footprint    *searchFootprint
+	mustBlockLog *mustBlockLogger
+	deadline     time.Time
+	hasDeadline  bool
+	logIndent    int
 }
 
 type mustBlockLogger struct {
@@ -1746,6 +1746,56 @@ func rootPriorityForThreat(player, currentPlayer PlayerColor, threat Threat) int
 	return prioDefault
 }
 
+func rootPriorityForThreatResponse(detail ThreatResponseMove) int {
+	if detail.Kind == ThreatResponseMustPlay {
+		if detail.Pattern == PatternWin5 {
+			return prioWin
+		}
+		if isFourThreat(detail.Pattern) {
+			return prioCreateFour
+		}
+		if detail.Pattern == PatternOpen3 || detail.Pattern == PatternBroken3 {
+			return prioCreateOpen3
+		}
+		return prioDefault
+	}
+	if detail.Pattern == PatternWin5 {
+		return prioBlockWin
+	}
+	if isFourThreat(detail.Pattern) {
+		return prioBlockFour
+	}
+	if detail.Pattern == PatternOpen3 || detail.Pattern == PatternBroken3 {
+		return prioBlockOpen3
+	}
+	return prioDefault
+}
+
+func rootFlagsForThreatResponse(detail ThreatResponseMove) uint32 {
+	if detail.Kind == ThreatResponseMustPlay {
+		if detail.Pattern == PatternWin5 {
+			return rootThreatOwnWin
+		}
+		if isFourThreat(detail.Pattern) {
+			return rootThreatOwnFour
+		}
+		if detail.Pattern == PatternOpen3 || detail.Pattern == PatternBroken3 {
+			return rootThreatOwnThree
+		}
+		return 0
+	}
+	if detail.Pattern == PatternWin5 {
+		return rootThreatOppWin
+	}
+	if isFourThreat(detail.Pattern) {
+		return rootThreatOppFour
+	}
+	if detail.Pattern == PatternOpen3 || detail.Pattern == PatternBroken3 {
+		return rootThreatOppThree
+	}
+	return 0
+}
+
 func rootFlagsForThreat(player, currentPlayer PlayerColor, threat Threat) uint32 {
 	flags := uint32(0)
 	if player == currentPlayer {
@@ -2009,7 +2059,6 @@ func GenerateThreatCandidates(context ThreatContext, state GameState, rules Rule
 	})
 	return out
 }
-
 
 func appendThreatResponseDetails(dst []ThreatResponseMove, moves []Move, threat Threat, kind ThreatResponseKind, boardSize int) []ThreatResponseMove {
 	moves = uniqueMoves(moves, boardSize)
@@ -2391,29 +2440,38 @@ func isDecisiveBlockPattern(pattern PatternType) bool {
 	}
 }
 
-func selectedMustBlockMoves(context ThreatContext, boardSize int) []Move {
+func selectedMustBlockDetails(context ThreatContext, boardSize int) []ThreatResponseMove {
 	details := selectedThreatResponseDetails(context, boardSize)
-	moves := make([]Move, 0, len(details))
+	selected := make([]ThreatResponseMove, 0, len(details))
 	for _, detail := range details {
 		if detail.Kind == ThreatResponseMustBlock && isDecisiveBlockPattern(detail.Pattern) {
-			moves = append(moves, detail.Move)
+			selected = append(selected, detail)
 		}
 	}
-	moves = uniqueMoves(moves, boardSize)
+	selected = dedupeThreatResponseDetails(selected, boardSize)
 	if len(context.MustBlockMoves) == 0 {
-		return moves
+		return selected
 	}
 	allowed := make(map[int]struct{}, len(context.MustBlockMoves))
 	for _, move := range uniqueMoves(context.MustBlockMoves, boardSize) {
 		allowed[move.Y*boardSize+move.X] = struct{}{}
 	}
-	filtered := make([]Move, 0, len(moves))
-	for _, move := range moves {
-		if _, ok := allowed[move.Y*boardSize+move.X]; ok {
-			filtered = append(filtered, move)
+	filtered := make([]ThreatResponseMove, 0, len(selected))
+	for _, detail := range selected {
+		if _, ok := allowed[detail.Move.Y*boardSize+detail.Move.X]; ok {
+			filtered = append(filtered, detail)
 		}
 	}
 	return filtered
+}
+
+func selectedMustBlockMoves(context ThreatContext, boardSize int) []Move {
+	details := selectedMustBlockDetails(context, boardSize)
+	moves := make([]Move, 0, len(details))
+	for _, detail := range details {
+		moves = append(moves, detail.Move)
+	}
+	return uniqueMoves(moves, boardSize)
 }
 
 func summaryNeedsStrongThreatDetails(summary TacticalSummary) bool {
@@ -2508,6 +2566,10 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 		context.OppBestTier = bestThreatTierFromSummary(eval.Summary, otherPlayer(sideToMove))
 		context.OwnBestPattern = bestThreatPatternFromSummary(eval.Summary, sideToMove)
 		context.OppBestPattern = bestThreatPatternFromSummary(eval.Summary, otherPlayer(sideToMove))
+		if summaryNeedsStrongThreatDetails(eval.Summary) {
+			context.OwnThreats = append([]Threat(nil), evalState.BuildQuietThreats(&state.Board, sideToMove)...)
+			context.OppThreats = append([]Threat(nil), evalState.BuildQuietThreats(&state.Board, otherPlayer(sideToMove))...)
+		}
 	} else {
 		urgencyStart := time.Now()
 		for i := range context.OwnThreats {
@@ -2540,14 +2602,20 @@ func AnalyzeThreats(state GameState, rules Rules, settings AIScoreSettings, side
 		context.CounterThreatMoves = append(context.CounterThreatMoves, responseMovesFromScores(state, selfCounter, settings.BoardSize)...)
 		context.ForkMoves = append(context.ForkMoves, responseMovesFromScores(state, selfFork, settings.BoardSize)...)
 		context.MustBlockMoves = append(context.MustBlockMoves, responseMovesFromScores(state, oppMustBlock, settings.BoardSize)...)
-		// Use per-cell patterns (via mustResponsePattern) so that a cell scored as Open4
-		// (score>=90) is treated as a decisive block even when the board's global best
-		// opponent pattern is only Broken3. selectedMustBlockMoves still filters to
-		// decisive-only patterns, so Open3 and below are never hard-restricted.
-		context.MustBlockDetails = append(context.MustBlockDetails, responseDetailsFromScores(state, oppMustBlock, settings.BoardSize, ThreatResponseMustBlock)...)
+		if len(context.OppThreats) == 0 {
+			context.MustBlockDetails = append(context.MustBlockDetails, responseDetailsFromScores(state, oppMustBlock, settings.BoardSize, ThreatResponseMustBlock)...)
+		}
 		context.PreventForkMoves = append(context.PreventForkMoves, responseMovesFromScores(state, oppPreventFork, settings.BoardSize)...)
 	} else {
 		context.WinningMoves = uniqueMoves(findImmediateWinMovesCached(cache, state, rules, sideToMove, settings.BoardSize, settings.Config), settings.BoardSize)
+	}
+	for _, threat := range context.OppThreats {
+		if !isDecisiveBlockPattern(PatternType(threat.Type)) {
+			continue
+		}
+		defenses := uniqueMoves(movesFromThreatPositions(threat.DefenseSquares), settings.BoardSize)
+		context.MustBlockMoves = append(context.MustBlockMoves, defenses...)
+		context.MustBlockDetails = appendThreatResponseDetails(context.MustBlockDetails, defenses, threat, ThreatResponseMustBlock, settings.BoardSize)
 	}
 	if len(context.WinningMoves) == 0 {
 		context.WinningMoves = uniqueMoves(findCaptureWinMoves(state, rules, sideToMove), settings.BoardSize)
@@ -2818,11 +2886,12 @@ func buildRootMovePool(state GameState, ctx minimaxContext, currentPlayer Player
 		})
 	}
 
-	for _, move := range selectedMustBlockMoves(threatContext, builder.boardSize) {
-		builder.addMove(move, rootSourceImmediateBlock, prioBlockWin, true, func(rm *RootMove) {
-			rm.ThreatFlags |= rootThreatOppWin
-			if rm.ThreatSeverity < threatSeverityForPattern(PatternWin5) {
-				rm.ThreatSeverity = threatSeverityForPattern(PatternWin5)
+	for _, detail := range selectedMustBlockDetails(threatContext, builder.boardSize) {
+		detail := detail
+		builder.addMove(detail.Move, rootSourceImmediateBlock, rootPriorityForThreatResponse(detail), true, func(rm *RootMove) {
+			rm.ThreatFlags |= rootFlagsForThreatResponse(detail)
+			if rm.ThreatSeverity < detail.Severity {
+				rm.ThreatSeverity = detail.Severity
 			}
 		})
 	}
@@ -3284,6 +3353,14 @@ func sortRootMoveIndices(pool []RootMove, maximizing bool, pvMove *Move) []int {
 			rightPV := right.Move.Equals(*pvMove)
 			if leftPV != rightPV && !quietPair {
 				return leftPV
+			}
+		}
+		if !quietPair {
+			if left.TacticalPriority != right.TacticalPriority {
+				return left.TacticalPriority < right.TacticalPriority
+			}
+			if left.ThreatSeverity != right.ThreatSeverity {
+				return left.ThreatSeverity > right.ThreatSeverity
 			}
 		}
 		if !quietPair && left.HasLastSearch && right.HasLastSearch {
@@ -5883,12 +5960,15 @@ func isImmediateWin(state GameState, rules Rules, move Move, player PlayerColor)
 	if ok, _ := rules.IsLegal(state, move, player); !ok {
 		return false
 	}
-	board := state.Board
+	after := state.Clone()
+	board := after.Board
 	cell := playerCell(player)
 	board.Set(move.X, move.Y, cell)
-	defer board.Remove(move.X, move.Y)
 	var captureBuf [8]Move
 	captures := rules.FindCapturesInto(board, move, cell, captureBuf[:0])
+	for _, captured := range captures {
+		board.Remove(captured.X, captured.Y)
+	}
 	capturedCount := len(captures)
 	totalCaptured := state.CapturedBlue
 	if player == PlayerRed {
@@ -5898,7 +5978,19 @@ func isImmediateWin(state GameState, rules Rules, move Move, player PlayerColor)
 	if totalCaptured >= rules.CaptureWinStones() {
 		return true
 	}
-	return rules.IsWin(board, move)
+	if !rules.IsWin(board, move) {
+		return false
+	}
+	after.Board = board
+	after.ToMove = player
+	after.LastMove = move
+	after.HasLastMove = true
+	if player == PlayerBlue {
+		after.CapturedBlue = totalCaptured
+	} else {
+		after.CapturedRed = totalCaptured
+	}
+	return !rules.OpponentCanBreakAlignmentByCapture(after, otherPlayer(player))
 }
 
 func isImmediateWinCached(cache *AISearchCache, state GameState, rules Rules, move Move, player PlayerColor, boardSize int) bool {
@@ -8576,7 +8668,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 		}
 		logAITask(ctx, 1, "Depth %d start", depth)
 		depthStart := time.Now()
-		if settings.Config.AiQuickWinExit {
+		if settings.Config.AiQuickWinExit && depth >= settings.Depth {
 			for _, rootMove := range rootPool {
 				move := rootMove.Move
 				if isImmediateWinCached(cache, state, rules, move, settings.Player, settings.BoardSize) {
@@ -8613,7 +8705,7 @@ func ScoreBoard(state GameState, rules Rules, settings AIScoreSettings) []float6
 						}
 						storeRootTransposeExact(state, settings, cache, depth, win, move, meta)
 					}
-					quickDepth := 1
+					quickDepth := depth
 					duration := time.Since(depthStart)
 					logAITask(ctx, 1, "Depth %d completed in %dms cached=%v quick_win=true requested_depth=%d", quickDepth, duration.Milliseconds(), false, depth)
 					if settings.Stats != nil {

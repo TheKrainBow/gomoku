@@ -54,14 +54,14 @@ type orderingBenchmarkDepthResult struct {
 }
 
 type orderingBenchmarkAggregate struct {
-	positions     int
-	candidateSum  int
-	rankSum       int
-	worstRank     int
-	top1Count     int
-	top2Count     int
-	top4Count     int
-	top8Count     int
+	positions    int
+	candidateSum int
+	rankSum      int
+	worstRank    int
+	top1Count    int
+	top2Count    int
+	top4Count    int
+	top8Count    int
 }
 
 func benchmarkProgressStep(total int) int {
@@ -904,6 +904,113 @@ func TestHasDecisiveCaptureThreatDetectsImmediateCaptureWinByCount(t *testing.T)
 	}
 }
 
+func TestImmediateWinRejectsAlignmentBreakableByCapture(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerRed
+	state.Status = StatusRunning
+	for _, move := range []Move{{X: 4, Y: 5}, {X: 5, Y: 5}, {X: 6, Y: 5}, {X: 7, Y: 5}, {X: 6, Y: 6}} {
+		state.Board.Set(move.X, move.Y, CellRed)
+	}
+	state.Board.Set(6, 7, CellBlue)
+	state.recomputeHashes()
+
+	winningButBreakable := Move{X: 8, Y: 5}
+	after := state.Clone()
+	after.Board.Set(winningButBreakable.X, winningButBreakable.Y, CellRed)
+	after.LastMove = winningButBreakable
+	after.HasLastMove = true
+
+	if !rules.IsWin(after.Board, winningButBreakable) {
+		t.Fatalf("expected red alignment after %v", winningButBreakable)
+	}
+	if !rules.OpponentCanBreakAlignmentByCapture(after, PlayerBlue) {
+		t.Fatalf("expected blue to be able to break the alignment by capture")
+	}
+	if isImmediateWin(state, rules, winningButBreakable, PlayerRed) {
+		t.Fatalf("expected breakable alignment not to be treated as an immediate win")
+	}
+}
+
+func TestQuickWinExitDoesNotReturnBeforeTargetDepth(t *testing.T) {
+	settings := DefaultGameSettings()
+	settings.BoardSize = 9
+	settings.ForbidDoubleThreeBlue = false
+	settings.ForbidDoubleThreeRed = false
+	rules := NewRules(settings)
+
+	state := DefaultGameState(settings)
+	state.ToMove = PlayerRed
+	state.Status = StatusRunning
+	for _, move := range []Move{{X: 1, Y: 4}, {X: 2, Y: 4}, {X: 3, Y: 4}, {X: 4, Y: 4}} {
+		state.Board.Set(move.X, move.Y, CellRed)
+	}
+	state.Board.Set(1, 1, CellBlue)
+	state.recomputeHashes()
+
+	cfg := DefaultConfig()
+	cfg.AiQuickWinExit = true
+	cfg.AiUseTtCache = false
+	cfg.AiEnableRootTranspose = false
+	cfg.AiEnableAspiration = false
+	cfg.AiQueueEnabled = false
+	cfg.AiLazySMPWorkers = 1
+	cfg.AiMinDepth = 1
+	cfg.AiDepth = 3
+	cfg.AiMaxDepth = 3
+
+	stats := &SearchStats{Start: time.Now()}
+	scores := ScoreBoard(state, rules, AIScoreSettings{
+		Depth:     cfg.AiDepth,
+		BoardSize: settings.BoardSize,
+		Player:    state.ToMove,
+		Config:    cfg,
+		Stats:     stats,
+		Cache:     newLiveSearchCache(),
+	})
+
+	if stats.CompletedDepths < cfg.AiMaxDepth {
+		t.Fatalf("expected quick win exit to wait until depth %d, completed=%d returned=%d", cfg.AiMaxDepth, stats.CompletedDepths, stats.ReturnedDepth)
+	}
+	if stats.ReturnedDepth > 0 && stats.ReturnedDepth < cfg.AiMaxDepth {
+		t.Fatalf("expected returned depth not to be shallow, got completed=%d returned=%d", stats.CompletedDepths, stats.ReturnedDepth)
+	}
+	leftWin := scoreForMove(scores, Move{X: 0, Y: 4}, settings.BoardSize)
+	rightWin := scoreForMove(scores, Move{X: 5, Y: 4}, settings.BoardSize)
+	if leftWin < winScore/2 && rightWin < winScore/2 {
+		t.Fatalf("expected immediate winning move to remain scored as winning")
+	}
+}
+
+func TestRootOrderingPrefersOpenThreeDefenseOverClosedThreeHistory(t *testing.T) {
+	openThreeDefense := RootMove{
+		Move:             Move{X: 6, Y: 10},
+		TacticalPriority: prioBlockOpen3,
+		ThreatFlags:      rootThreatOppThree,
+		ThreatSeverity:   threatSeverityForPattern(PatternOpen3),
+		IsForced:         true,
+	}
+	closedThreeHistory := RootMove{
+		Move:               Move{X: 5, Y: 7},
+		TacticalPriority:   prioQuietOpp3 + 1,
+		ThreatSeverity:     threatSeverityForPattern(PatternClosed3),
+		LastSearchScore:    -winScore,
+		LastCompletedDepth: 6,
+		HasLastSearch:      true,
+	}
+
+	pool := []RootMove{closedThreeHistory, openThreeDefense}
+	ordered := sortRootMoveIndices(pool, false, nil)
+	if len(ordered) == 0 || !pool[ordered[0]].Move.Equals(openThreeDefense.Move) {
+		t.Fatalf("expected open3 defense first, got order=%v first=%+v", ordered, pool[ordered[0]].Move)
+	}
+}
+
 func TestCandidateLimitHalvesEachPlyToMinimumTwo(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AiEnableHardPlyCaps = true
@@ -1049,7 +1156,6 @@ func TestBuildRootMovePoolRestrictsToMustPlayOpenThreeExtensionsWithTempo(t *tes
 		t.Fatalf("expected tempo position to keep same winning extensions, got (%d,%d)", best.X, best.Y)
 	}
 }
-
 
 func TestGenerateThreatCandidatesIncludesOpenThreeMustAnswer(t *testing.T) {
 	settings := DefaultGameSettings()

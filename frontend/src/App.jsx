@@ -38,6 +38,37 @@ function wsUrl(path) {
   return `${protocol}://${window.location.host}${path}`
 }
 
+function applyFreshStatus(prev, next) {
+  const prevHistoryLen = Array.isArray(prev.history) ? prev.history.length : 0
+  const nextHistoryLen = Array.isArray(next?.history) ? next.history.length : 0
+  return nextHistoryLen < prevHistoryLen ? prev : next
+}
+
+function historyEntriesMatch(left, right) {
+  return (
+    left &&
+    right &&
+    left.x === right.x &&
+    left.y === right.y &&
+    left.player === right.player &&
+    Boolean(left.is_ai) === Boolean(right.is_ai) &&
+    (left.captured_count || 0) === (right.captured_count || 0)
+  )
+}
+
+function appendFreshHistory(prevHistory, nextHistory) {
+  const incoming = Array.isArray(nextHistory) ? nextHistory : []
+  if (incoming.length === 0) {
+    return prevHistory
+  }
+  const lastExisting = prevHistory[prevHistory.length - 1]
+  const firstIncoming = incoming[0]
+  if (historyEntriesMatch(lastExisting, firstIncoming)) {
+    return [...prevHistory, ...incoming.slice(1)]
+  }
+  return [...prevHistory, ...incoming]
+}
+
 export default function App() {
   const [ping, setPing] = useState('pending')
   const [status, setStatus] = useState(defaultStatus)
@@ -133,7 +164,7 @@ export default function App() {
     fetch('/api/status')
       .then((res) => res.json())
       .then((data) => {
-        setStatus(data)
+        setStatus((prev) => applyFreshStatus(prev, data))
       })
       .catch(() => {})
 
@@ -192,21 +223,24 @@ export default function App() {
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data)
       if (msg.type === 'status') {
-        setStatus(msg.payload)
+        setStatus((prev) => applyFreshStatus(prev, msg.payload))
       }
       if (msg.type === 'history') {
-        setStatus((prev) => ({
-          ...prev,
-          history: [...prev.history, ...(msg.payload.history || [])],
-          move_count: prev.move_count + (msg.payload.history ? msg.payload.history.length : 0),
-          next_player: (() => {
-            if (msg.payload.history && msg.payload.history.length > 0) {
-              const last = msg.payload.history[msg.payload.history.length - 1]
-              return last.player === 1 ? 2 : 1
-            }
-            return prev.next_player
-          })()
-        }))
+        setStatus((prev) => {
+          const history = appendFreshHistory(prev.history || [], msg.payload.history)
+          return {
+            ...prev,
+            history,
+            move_count: history.length,
+            next_player: (() => {
+              if (msg.payload.history && msg.payload.history.length > 0) {
+                const last = msg.payload.history[msg.payload.history.length - 1]
+                return last.player === 1 ? 2 : 1
+              }
+              return prev.next_player
+            })()
+          }
+        })
       }
       if (msg.type === 'reset') {
         setStatus((prev) => ({
@@ -866,7 +900,7 @@ export default function App() {
       })
       if (res.ok) {
         const data = await res.json()
-        setStatus(data)
+        setStatus((prev) => applyFreshStatus(prev, data))
       }
     } finally {
       setMoveBusy(false)

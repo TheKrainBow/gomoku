@@ -110,6 +110,8 @@ button.danger {
   display: inline-flex;
   flex-direction: column;
   gap: var(--cell-gap, 2px);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .board-panel .board {
